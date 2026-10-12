@@ -906,6 +906,8 @@ public:
   void BreakpointOp(OpcodeArgs, uint32_t BP);
   void UnimplementedOp(OpcodeArgs);
   void PermissionRestrictedOp(OpcodeArgs);
+  // haku: hands a system instruction to the embedder (Context::EnableSystemOps).
+  void SystemOp(OpcodeArgs, FEXCore::Core::SystemOpKind Kind);
 
   ///< Helper for PSHUD and VPERMILPS(imm) since they are the same instruction
   Ref Single128Bit4ByteVectorShuffle(Ref Src, uint8_t Shuffle);
