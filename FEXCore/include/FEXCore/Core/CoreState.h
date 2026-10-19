@@ -522,6 +522,12 @@ struct CpuStateFrame {
    */
   uint32_t HookBypass {};
 
+  /**
+   * @brief haku: host cycle-counter ticks the guest's RDTSC leaves out (the time
+   * the emulation was paused): the counter it reads is the host's less this.
+   */
+  uint64_t CycleCounterOffset {};
+
   struct SynchronousFaultDataStruct {
     bool FaultToTopAndGeneratedException {};
     uint8_t Signal;
