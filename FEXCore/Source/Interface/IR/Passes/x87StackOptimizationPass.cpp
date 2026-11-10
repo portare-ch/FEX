@@ -180,7 +180,10 @@ private:
   // All ones while FCW.PC selects single precision, else zero; built at the
   // block's first rounded operation, built again after a store to FCW.
   Ref PCMaskCache {};
-  Ref RoundToPrecisionControl(Ref Value);
+  Ref RCCache {}; // FCW.RC, loaded with PCMaskCache
+  Ref RoundToPrecisionControl(Ref Value, IROps Op, Ref A, Ref B);
+  Ref NonZero(Ref V);
+  Ref EqualTo(Ref V, uint64_t K);
 
   // Helpers
   Ref RotateRight8(uint32_t V, Ref Amount);
@@ -392,6 +395,7 @@ inline void X87StackOptimization::InvalidateCachedRegs() {
   TopValueCache.fill(nullptr);
   TopValidCache.fill(StackSlot::UNUSED);
   PCMaskCache = {};
+  RCCache = {};
 }
 
 inline void X87StackOptimization::Reset() {
@@ -541,25 +545,119 @@ inline void X87StackOptimization::StackPop() {
 }
 
 
-Ref X87StackOptimization::RoundToPrecisionControl(Ref Value) {
+// 1 if V (64 bits) is not zero, else 0: (V | -V) >> 63. No flags are written
+// (NZCV can hold the guest's).
+Ref X87StackOptimization::NonZero(Ref V) {
+  Ref Neg = IREmit->_Sub(OpSize::i64Bit, GetConstant(0), V);
+  return IREmit->_Lshr(OpSize::i64Bit, IREmit->_Or(OpSize::i64Bit, V, Neg), GetConstant(63));
+}
+
+// 1 if V == K, else 0.
+Ref X87StackOptimization::EqualTo(Ref V, uint64_t K) {
+  return IREmit->_Xor(OpSize::i64Bit, NonZero(IREmit->_Xor(OpSize::i64Bit, V, IREmit->_Constant(K))), GetConstant(1));
+}
+
+// Value = A <Op> B (Op: VFADD, VFSUB, VFMUL, VFDIV; VFSQRT of A), computed in
+// double in the host's rounding mode, FCW.RC's. While FCW.PC selects single
+// precision the x87 rounds the exact result once to a 24-bit significand,
+// keeping its exponent range (PC narrows only the significand). Rounding the
+// double again would round twice: a double landing exactly on a 24-bit
+// midpoint is a tie for the second rounding though the exact result was not
+// (fadd 0x3FF0000010000000 + 0x3AF0000000000000 is 0x3FF0000020000000 on the
+// hardware, 0x3FF0000000000000 rounded twice). So the double's significand is
+// rounded to 24 bits in place, its bits as integers, with the exact error's
+// sign deciding such a tie: TwoSum for add and sub, the FMA residual for mul,
+// div and sqrt (exact in round to nearest, the only mode with ties).
+// Directed modes round the double's dropped bits by their sign alone: one
+// directed rounding after another of the same direction is the single one.
+// Infinities and NaNs pass unchanged. No flags are written.
+Ref X87StackOptimization::RoundToPrecisionControl(Ref Value, IROps Op, Ref A, Ref B) {
   if (!RoundSingle) {
     return Value;
   }
   if (!PCMaskCache) {
     // FCW.PC (bits 9:8) is 0 for single precision: (PC - 1) >> 63 is then all
-    // ones, and zero for double or extended. No flags are written (NZCV can
-    // hold the guest's).
+    // ones, and zero for double or extended.
     Ref FCW = IREmit->_LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
     Ref PC = IREmit->_Bfe(OpSize::i32Bit, 2, 8, FCW);
     Ref Mask = IREmit->_Sbfe(OpSize::i64Bit, 1, 63, IREmit->_Sub(OpSize::i64Bit, PC, GetConstant(1)));
     PCMaskCache = IREmit->_VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, Mask);
+    RCCache = IREmit->_Bfe(OpSize::i32Bit, 2, 10, FCW);
   }
-  // To single and back, in the host's rounding mode (FCW.RC's). For add, sub,
-  // mul, div and sqrt a double holds enough bits that rounding it again
-  // gives the single result rounded once from the exact one.
-  Ref Single = IREmit->_Float_FToF(OpSize::i32Bit, OpSize::i64Bit, Value);
-  Single = IREmit->_Float_FToF(OpSize::i64Bit, OpSize::i32Bit, Single);
-  return IREmit->_VBSL(OpSize::i64Bit, PCMaskCache, Single, Value);
+
+  // The exact error's sign (ESign, 1 negative) and whether there is one (Inexact).
+  Ref ESign {};
+  Ref Inexact {};
+  const auto F64 = OpSize::i64Bit;
+  switch (Op) {
+  case OP_VFADD:
+  case OP_VFSUB: {
+    // TwoSum: Value + E == A + B' exactly, B' = B or -B.
+    Ref Bp = Op == OP_VFSUB ? IREmit->_VFNeg(F64, F64, B) : B;
+    Ref Bv = IREmit->_VFSub(F64, F64, Value, A);
+    Ref Av = IREmit->_VFSub(F64, F64, Value, Bv);
+    Ref E = IREmit->_VFAdd(F64, F64, IREmit->_VFSub(F64, F64, A, Av), IREmit->_VFSub(F64, F64, Bp, Bv));
+    Ref EBits = IREmit->_VExtractToGPR(F64, F64, E, 0);
+    ESign = IREmit->_Lshr(F64, EBits, GetConstant(63));
+    Inexact = NonZero(IREmit->_Lshl(F64, EBits, GetConstant(1)));
+    break;
+  }
+  case OP_VFMUL: {
+    // A * B - Value, exact.
+    Ref EBits = IREmit->_VExtractToGPR(F64, F64, IREmit->_VFMLS(F64, F64, A, B, Value), 0);
+    ESign = IREmit->_Lshr(F64, EBits, GetConstant(63));
+    Inexact = NonZero(IREmit->_Lshl(F64, EBits, GetConstant(1)));
+    break;
+  }
+  case OP_VFDIV: {
+    // R = A - Value * B, exact; the error R / B has R's sign times B's.
+    Ref RBits = IREmit->_VExtractToGPR(F64, F64, IREmit->_VFNMLA(F64, F64, Value, B, A), 0);
+    Ref BBits = IREmit->_VExtractToGPR(F64, F64, B, 0);
+    ESign = IREmit->_Lshr(F64, IREmit->_Xor(F64, RBits, BBits), GetConstant(63));
+    Inexact = NonZero(IREmit->_Lshl(F64, RBits, GetConstant(1)));
+    break;
+  }
+  default: {
+    // VFSQRT: R = A - Value * Value, exact; the root is above Value when R > 0.
+    Ref RBits = IREmit->_VExtractToGPR(F64, F64, IREmit->_VFNMLA(F64, F64, Value, Value, A), 0);
+    ESign = IREmit->_Lshr(F64, RBits, GetConstant(63));
+    Inexact = NonZero(IREmit->_Lshl(F64, RBits, GetConstant(1)));
+    break;
+  }
+  }
+
+  constexpr uint64_t Dropped = (1ULL << 29) - 1; // the double's 29 bits below a 24-bit significand
+  constexpr uint64_t Half = 1ULL << 28;
+  Ref Bits = IREmit->_VExtractToGPR(F64, F64, Value, 0);
+  Ref Sign = IREmit->_Lshr(F64, Bits, GetConstant(63));
+  Ref Low = IREmit->_And(F64, Bits, IREmit->_Constant(Dropped));
+  Ref One = GetConstant(1);
+
+  // Round to nearest (even): up past the midpoint; at it, toward the exact
+  // value when the double was inexact (its error's side), else to even.
+  Ref AboveHalf = IREmit->_Lshr(F64, IREmit->_Sub(F64, IREmit->_Constant(Half), Low), GetConstant(63));
+  Ref AtHalf = EqualTo(Low, Half);
+  Ref Away = IREmit->_Xor(F64, IREmit->_Xor(F64, ESign, Sign), One); // the exact value's magnitude is larger
+  Ref Even = IREmit->_And(F64, IREmit->_Lshr(F64, Bits, GetConstant(29)), One);
+  Ref Tie = IREmit->_Or(F64, IREmit->_And(F64, Inexact, Away), IREmit->_And(F64, IREmit->_Xor(F64, Inexact, One), Even));
+  Ref NearInc = IREmit->_Or(F64, AboveHalf, IREmit->_And(F64, AtHalf, Tie));
+
+  // Directed: up in magnitude when bits are dropped and the mode points away
+  // from zero for this sign (RC 1: down, 2: up, 3: toward zero).
+  Ref LowSet = NonZero(Low);
+  Ref DownNeg = IREmit->_And(F64, EqualTo(RCCache, 1), Sign);
+  Ref UpPos = IREmit->_And(F64, EqualTo(RCCache, 2), IREmit->_Xor(F64, Sign, One));
+  Ref DirInc = IREmit->_And(F64, LowSet, IREmit->_Or(F64, DownNeg, UpPos));
+  Ref Inc = IREmit->_Or(F64, IREmit->_And(F64, EqualTo(RCCache, 0), NearInc), DirInc);
+
+  // Infinities and NaNs (exponent all ones) are left as they are.
+  Ref Special = EqualTo(IREmit->_Bfe(F64, 11, 52, Bits), 0x7FF);
+  Ref Keep = IREmit->_Sub(F64, Special, One); // all ones unless special
+  Ref Clear = IREmit->_And(F64, IREmit->_Constant(Dropped), Keep);
+  Inc = IREmit->_And(F64, Inc, IREmit->_Xor(F64, Special, One));
+  Ref Rounded = IREmit->_Add(F64, IREmit->_Andn(F64, Bits, Clear), IREmit->_Lshl(F64, Inc, GetConstant(29)));
+  Ref Single = IREmit->_VCastFromGPR(F64, F64, Rounded);
+  return IREmit->_VBSL(F64, PCMaskCache, Single, Value);
 }
 
 void X87StackOptimization::HandleUnop(IROps Op64, bool VFOp64, IROps Op80) {
@@ -569,7 +667,7 @@ void X87StackOptimization::HandleUnop(IROps Op64, bool VFOp64, IROps Op80) {
   if (ReducedPrecisionMode) {
     if (VFOp64) {
       DeriveOp(Value, Op64, IREmit->_VFSqrt(OpSize::i64Bit, OpSize::i64Bit, St0));
-      Value = RoundToPrecisionControl(Value);
+      Value = RoundToPrecisionControl(Value, Op64, St0, St0);
     } else {
       DeriveOp(Value, Op64, IREmit->_F64SIN(St0));
     }
@@ -598,7 +696,7 @@ void X87StackOptimization::HandleBinopValue(IROps Op64, bool VFOp64, IROps Op80,
       }
     }
     if (VFOp64) {
-      Node = RoundToPrecisionControl(Node);
+      Node = Reverse ? RoundToPrecisionControl(Node, Op64, ValueNode, StackNode) : RoundToPrecisionControl(Node, Op64, StackNode, ValueNode);
     }
   } else {
     if (Reverse) {
@@ -792,7 +890,8 @@ void X87StackOptimization::Run(IREmitter* Emit) {
     IREmit->SetCurrentCodeBlock(BlockNode);
     for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
       if (IROp->Op == OP_STORECONTEXT && IROp->C<IROp_StoreContext>()->Offset == offsetof(FEXCore::Core::CPUState, FCW)) {
-        PCMaskCache = {}; // FLDCW, FRSTOR, FNINIT...: the precision may change
+        PCMaskCache = {}; // FLDCW, FRSTOR, FNINIT...: the precision or rounding may change
+        RCCache = {};
       }
       if (!LoweredX87(IROp->Op)) {
         continue;
