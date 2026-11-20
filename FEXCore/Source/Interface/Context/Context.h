@@ -488,6 +488,10 @@ public:
     GuestCycleCounterRatioQ32 = RatioQ32;
   }
 
+  void SetRSqrtTable(const uint16_t* Mantissas) override {
+    RSqrtTable = Mantissas;
+  }
+
   void SetIDTRegister(uint64_t Base, uint16_t Limit) override {
     IDTBase = Base;
     IDTLimit = Limit;
@@ -506,6 +510,7 @@ public:
   // / EnableX87SinglePrecision.
   bool SystemOps = false;
   uint64_t GuestCycleCounterRatioQ32 = 0;
+  const uint16_t* RSqrtTable = nullptr; // haku: Context::SetRSqrtTable
   uint64_t IDTBase = 0;
   uint16_t IDTLimit = 0;
   HookQueryFn HookQuery = nullptr;

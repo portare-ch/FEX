@@ -196,6 +196,15 @@ public:
   FEX_DEFAULT_VISIBILITY virtual void EnableSystemOps() = 0;
 
   /**
+   * @brief haku: RSQRTSS and RSQRTPS return a CPU's own table values, not 1/sqrt(x) correctly
+   * rounded: for a positive normal x the result's exponent is (380 - (bits >> 23)) >> 1 and
+   * its mantissa Mantissas[(bits >> 13) & 2047] << 11 (2048 entries, the embedder's to keep
+   * alive). Zeros and denormals give a signed infinity, negative values the default NaN
+   * (0xFFC00000), +infinity 0, and a NaN comes back quiet. Set before InitCore.
+   */
+  FEX_DEFAULT_VISIBILITY virtual void SetRSqrtTable(const uint16_t* Mantissas) = 0;
+
+  /**
    * @brief haku: RDTSC returns the host cycle counter times RatioQ32 / 2^32 (0: unscaled).
    * Set before InitCore.
    */
