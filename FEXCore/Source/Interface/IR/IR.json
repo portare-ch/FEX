@@ -2749,6 +2749,15 @@
                 ],
         "DestSize": "DstElementSize"
       },
+      "FPR = Float_F64ToF32X87 OpSize:#DstElementSize, FPR:$Scalar": {
+        "Desc": ["haku: Float_FToF from a double to a float as the x87 stores one: a result rounded",
+                 "up to the smallest normal float is no underflow (the x87 judges tininess after",
+                 "rounding, the host before). Leaves NZCV alone.",
+                 "Zeroes the upper bits of the vector register"
+                ],
+        "DestSize": "DstElementSize"
+      },
+
       "FPR = Float_FToF OpSize:#DstElementSize, OpSize:$SrcElementSize, FPR:$Scalar": {
         "Desc": ["Scalar op: Converts float from one size to another",
                  "Zeroes the upper bits of the vector register"

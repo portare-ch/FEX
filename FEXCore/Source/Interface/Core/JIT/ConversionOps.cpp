@@ -173,6 +173,52 @@ DEF_OP(Float_FromGPR_S) {
   }
 }
 
+DEF_OP(Float_F64ToF32X87) {
+  auto Op = IROp->C<IR::IROp_Float_F64ToF32X87>();
+  auto Dst = GetVReg(Node);
+  auto Src = GetVReg(Op->Scalar);
+  constexpr auto X = ARMEmitter::Size::i64Bit;
+  constexpr auto W = ARMEmitter::Size::i32Bit;
+  ARMEmitter::ForwardLabel Near, Directed, Clear, Done;
+
+  // Only a double in [2^-127, 2^-126) can round up to the smallest normal float (2^-126).
+  fmov(X, TMP4, Src.D());
+  ubfx(X, TMP2, TMP4, 52, 11);
+  sub(X, TMP2, TMP2, 1023 - 127);
+  (void)cbz(X, TMP2, &Near);
+  fcvt(Dst.S(), Src.D());
+  (void)b(&Done);
+
+  // The host calls every inexact result below 2^-126 an underflow. The x87 rounds to 24 bits
+  // as if the exponent had no lower bound first, and it is an underflow only if that is still
+  // below 2^-126: not from 2^-126 - 2^-151 up at round to nearest, and not above
+  // 2^-126 - 2^-150 when rounding away from zero (either way the float stored is 2^-126).
+  (void)Bind(&Near);
+  mrs(TMP3, ARMEmitter::SystemRegister::FPSR);
+  fcvt(Dst.S(), Src.D());
+  (void)tbnz(TMP3, 3, &Done); // an underflow from before stays
+  fmov(W, TMP1.W(), Dst.S());
+  and_(W, TMP1, TMP1, 0x7FFF'FFFFU);
+  sub(W, TMP1, TMP1, 0x800, true);
+  (void)cbnz(W, TMP1, &Done); // not 2^-126: an underflow on the x87 too
+  mvn(X, TMP2, TMP4);
+  mrs(TMP1, ARMEmitter::SystemRegister::FPCR);
+  ubfx(X, TMP1, TMP1, 22, 2);
+  (void)cbnz(X, TMP1, &Directed);
+  ubfx(X, TMP2, TMP2, 28, 24); // the mantissa's top 24 bits all set
+  (void)cbnz(X, TMP2, &Done);
+  (void)b(&Clear);
+  (void)Bind(&Directed);
+  ubfx(X, TMP2, TMP2, 29, 23); // its top 23 bits all set, and something below them
+  (void)cbnz(X, TMP2, &Done);
+  ubfx(X, TMP2, TMP4, 0, 29);
+  (void)cbz(X, TMP2, &Done);
+  (void)Bind(&Clear);
+  orr(X, TMP1, TMP3, 1U << 4); // the flags from before and inexact, without the underflow
+  msr(ARMEmitter::SystemRegister::FPSR, TMP1);
+  (void)Bind(&Done);
+}
+
 DEF_OP(Float_FToF) {
   auto Op = IROp->C<IR::IROp_Float_FToF>();
   const uint16_t Conv = (IR::OpSizeToSize(Op->Header.ElementSize) << 8) | IR::OpSizeToSize(Op->SrcElementSize);
