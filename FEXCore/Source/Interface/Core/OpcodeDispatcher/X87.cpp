@@ -6,6 +6,7 @@ desc: Handles x86/64 x87 to IR
 $end_info$
 */
 
+#include <string_view>
 #include "Interface/Core/OpcodeDispatcher.h"
 #include "Interface/Core/X86Tables/X86Tables.h"
 #include "Interface/IR/IR.h"
@@ -21,6 +22,10 @@ $end_info$
 #include <stdint.h>
 
 namespace FEXCore::IR {
+
+// haku: the x87's exception flags that are no longer in the host's (FPSR): kept here when
+// LDMXCSR, or the embedder, clears the host's. One byte, in the flag slot the x87's DE has.
+static constexpr uint32_t X87KeptExceptionsOffset = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
 class OrderedNode;
 #define OpcodeArgs [[maybe_unused]] FEXCore::X86Tables::DecodedOp Op
 
@@ -452,6 +457,8 @@ Ref OpDispatchBuilder::ReconstructX87StateFromFSW_Helper(Ref FSW) {
   SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(IE);
   if (ReducedPrecisionMode) {
     X87ClearExceptions(_And(OpSize::i32Bit, FSW, Constant(0x3F))); // haku: the loaded status word's
+  } else {
+    _StoreContextGPR(OpSize::i8Bit, _And(OpSize::i32Bit, FSW, Constant(0x3F)), X87KeptExceptionsOffset);
   }
   return Top;
 }
@@ -663,6 +670,11 @@ void OpDispatchBuilder::FCOMI(OpcodeArgs, IR::OpSize Width, bool Integer, OpDisp
   Ref arg {};
   Ref b {};
 
+  // haku: whether the compare is quiet (the FUCOM family), for the fallback that does it
+  // (OpHandlers<OP_F80CMP>): a byte in the context, in the flag slot the x87's ZE has.
+  const bool Quiet = std::string_view(Op->TableInfo->Name).substr(0, 2) == "FU";
+  _StoreContextGPR(OpSize::i8Bit, Constant(Quiet ? 1 : 0), offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_ZE_LOC);
+
   Ref Res {};
   if (Op->Src[0].IsNone()) {
     // Implicit arg
@@ -711,9 +723,8 @@ void OpDispatchBuilder::FCOMI(OpcodeArgs, IR::OpSize Width, bool Integer, OpDisp
     SetRFLAG<FEXCore::X86State::RFLAG_AF_RAW_LOC>(Constant(0));
   }
 
-  // Set Invalid Operation flag when unordered (NaN comparison)
-  // The x87 exception flags are sticky. Preserve earlier result
-  SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(_Or(OpSize::i32Bit, GetRFLAG(FEXCore::X86State::X87FLAG_IE_LOC), HostFlag_Unordered));
+  // haku: the invalid operation of an unordered compare is the fallback's to raise (a quiet
+  // compare of a quiet NaN raises none); the status word reads it from the kept exceptions.
 
   if (PopTwice) {
     _PopStackDestroy();
@@ -725,6 +736,8 @@ void OpDispatchBuilder::FCOMI(OpcodeArgs, IR::OpSize Width, bool Integer, OpDisp
 }
 
 void OpDispatchBuilder::FTST(OpcodeArgs) {
+  // haku: FTST is a signaling compare (see FCOMI)
+  _StoreContextGPR(OpSize::i8Bit, Constant(0), offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_ZE_LOC);
   Ref Res = _F80StackTest(0);
 
   Ref HostFlag_CF = _Bfe(OpSize::i64Bit, 1, FCMP_FLAG_LT, Res);
@@ -802,14 +815,15 @@ Ref OpDispatchBuilder::ReconstructFSW_Helper(Ref T) {
     // raised since they were last cleared, and the ones kept in the context meanwhile.
     FSW = _Or(OpSize::i64Bit, FSW, _GetMXCSRFlags());
     FSW = _Or(OpSize::i64Bit, FSW, X87KeptExceptions());
+  } else {
+    // haku: the 80-bit x87's, which its soft-float operations leave in the context
+    // (HandleX87Exception); the host's flags are MXCSR's alone there.
+    FSW = _Or(OpSize::i64Bit, FSW, X87KeptExceptions());
   }
 
   return FSW;
 }
 
-// haku: the x87's exception flags that are no longer in the host's (FPSR): kept here when
-// LDMXCSR, or the embedder, clears the host's. One byte, in the flag slot the x87's DE has.
-static constexpr uint32_t X87KeptExceptionsOffset = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
 
 Ref OpDispatchBuilder::X87KeptExceptions() {
   return _LoadContextGPR(OpSize::i8Bit, X87KeptExceptionsOffset);
@@ -847,6 +861,8 @@ void OpDispatchBuilder::FNCLEX(OpcodeArgs) {
   SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(_Constant(0));
   if (ReducedPrecisionMode) {
     X87ClearExceptions(Constant(0)); // haku
+  } else {
+    _StoreContextGPR(OpSize::i8Bit, Constant(0), X87KeptExceptionsOffset);
   }
 }
 
@@ -878,6 +894,8 @@ void OpDispatchBuilder::FNINIT(OpcodeArgs) {
   SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(Zero);
   if (ReducedPrecisionMode) {
     X87ClearExceptions(Zero); // haku
+  } else {
+    _StoreContextGPR(OpSize::i8Bit, Zero, X87KeptExceptionsOffset);
   }
 
   // fninit resets the FIP.

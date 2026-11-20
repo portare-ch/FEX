@@ -1165,7 +1165,10 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         OpSize StoreSize = Op->StoreSize;
         LOGMAN_THROW_A_FMT(Op->StoreSize == OpSize::i32Bit || Op->StoreSize == OpSize::i64Bit || Op->StoreSize == OpSize::f80Bit,
                            "Invalid store size in x87 store stack mem");
-        if (!SlowPath && Value->Source && Value->Source->Size == StoreSize) {
+        // haku: not in the 80-bit mode for a float or a double: the x87's load converts, so a
+        // signaling NaN comes out quiet (and raises invalid), where the copy keeps its bits.
+        // An 80-bit value is loaded and stored as it is.
+        if (!SlowPath && Value->Source && Value->Source->Size == StoreSize && (ReducedPrecisionMode || StoreSize == OpSize::f80Bit)) {
           Ref SourceValue = Value->Source->Node;
           if (Op->StoreSize == OpSize::f80Bit) {
             Store80BitToMem(Op, SourceValue, AddrNode, Offset, Align, OffsetType, OffsetScale);
