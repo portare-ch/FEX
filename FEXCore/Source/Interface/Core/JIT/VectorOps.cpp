@@ -6,6 +6,7 @@ $end_info$
 */
 
 #include "Interface/Core/Dispatcher/Dispatcher.h"
+#include "Interface/Context/Context.h"
 #include "Interface/Core/JIT/JITClass.h"
 
 #include <FEXCore/Utils/MathUtils.h>
@@ -366,6 +367,59 @@ void Arm64JITCore::VFScalarOperation(IR::OpSize OpSize, IR::OpSize ElementSize, 
 // However the result of the scalar operation is inserted into Vector1 and moved to Destination.
 // The untouched bits of the destination come from Vector1, unless it's a 256 vector
 // and ZeroUpperBits is true, in which case the upper bits are zero.
+void Arm64JITCore::EmitRSqrtTableLookup() {
+  // No compares: NZCV holds the guest's flags, which RSQRT leaves alone.
+  constexpr auto W = ARMEmitter::Size::i32Bit;
+  ARMEmitter::ForwardLabel Special, NaN, Infinity, Tiny, Negative, Done;
+
+  // Positive and normal: 0x00800000 <= bits < 0x7F800000, so ((bits - 0x00800000) >> 24) - 0x7F
+  // is negative.
+  sub(W, TMP2, TMP1, 0x800, true);
+  lsr(W, TMP3, TMP2, 24);
+  sub(W, TMP3, TMP3, 0x7F);
+  (void)tbz(TMP3, 31, &Special);
+  ubfx(W, TMP2, TMP1, 13, 11);
+  ldr(TMP4, STATE, offsetof(FEXCore::Core::CpuStateFrame, RSqrtTable));
+  ldrh(TMP2, TMP4, TMP2, ARMEmitter::ExtendedType::LSL_64, 1);
+  lsr(W, TMP3, TMP1, 23);
+  movz(W, TMP4, 380);
+  sub(W, TMP3, TMP4, TMP3);
+  lsr(W, TMP3, TMP3, 1);
+  lsl(W, TMP2, TMP2, 11);
+  orr(W, TMP1, TMP2, TMP3, ARMEmitter::ShiftType::LSL, 23);
+  (void)b(&Done);
+
+  (void)Bind(&Special);
+  // TMP2 = magnitude - infinity: positive for a NaN, 0 for an infinity.
+  and_(W, TMP2, TMP1, 0x7FFF'FFFFU);
+  LoadConstant(W, TMP3, 0x7F80'0000U);
+  sub(W, TMP2, TMP2, TMP3);
+  (void)cbz(W, TMP2, &Infinity);
+  (void)tbz(TMP2, 31, &NaN);
+  ubfx(W, TMP2, TMP1, 23, 8);
+  (void)cbz(W, TMP2, &Tiny);
+  (void)b(&Negative); // a negative normal
+
+  (void)Bind(&NaN); // quiet, payload and sign kept
+  orr(W, TMP1, TMP1, 0x0040'0000U);
+  (void)b(&Done);
+
+  (void)Bind(&Tiny); // zeros and denormals: an infinity of their sign
+  and_(W, TMP1, TMP1, 0x8000'0000U);
+  orr(W, TMP1, TMP1, TMP3);
+  (void)b(&Done);
+
+  (void)Bind(&Infinity);
+  (void)tbnz(TMP1, 31, &Negative);
+  movz(W, TMP1, 0);
+  (void)b(&Done);
+
+  (void)Bind(&Negative);
+  LoadConstant(W, TMP1, 0xFFC0'0000U);
+
+  (void)Bind(&Done);
+}
+
 void Arm64JITCore::VFScalarUnaryOperation(IR::OpSize OpSize, IR::OpSize ElementSize, bool ZeroUpperBits, ScalarUnaryOpCaller ScalarEmit,
                                           ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1,
                                           std::variant<ARMEmitter::VRegister, ARMEmitter::Register> Vector2) {
@@ -534,11 +588,24 @@ DEF_OP(VFRSqrtScalarInsert) {
     frsqrte(SubRegSize.Scalar, Dst.D(), Src.D());
   };
 
-  std::array<ScalarUnaryOpCaller, 2> Handlers = {
+  // haku: the CPU's table (Context::SetRSqrtTable)
+  auto ScalarEmitTable = [this](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
+    auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
+    fmov(ARMEmitter::Size::i32Bit, TMP1.W(), Src.S());
+    EmitRSqrtTableLookup();
+    if (HostSupportsAFP) {
+      ins(ARMEmitter::SubRegSize::i32Bit, Dst, 0, TMP1);
+    } else {
+      fmov(ARMEmitter::Size::i32Bit, Dst.S(), TMP1.W());
+    }
+  };
+
+  std::array<ScalarUnaryOpCaller, 3> Handlers = {
     ScalarEmit,
     ScalarEmitRPRES,
+    ScalarEmitTable,
   };
-  const auto HandlerIndex = ElementSize == IR::OpSize::i32Bit && HostSupportsRPRES ? 1 : 0;
+  const auto HandlerIndex = ElementSize == IR::OpSize::i32Bit && CTX->RSqrtTable ? 2 : ElementSize == IR::OpSize::i32Bit && HostSupportsRPRES ? 1 : 0;
 
   // Bit of a tricky detail.
   // The upper bits of the destination comes from the first source.
@@ -1664,6 +1731,27 @@ DEF_OP(VFRSqrt) {
 
   const auto Dst = GetVReg(Node);
   const auto Vector = GetVReg(Op->Vector);
+
+  if (CTX->RSqrtTable && ElementSize == IR::OpSize::i32Bit && !Is256Bit) {
+    // haku: the CPU's table (Context::SetRSqrtTable), a lane at a time.
+    const unsigned Lanes = IsScalar ? 1 : IR::OpSizeToSize(OpSize) / 4;
+    if (!IsScalar) {
+      movi(ARMEmitter::SubRegSize::i64Bit, VTMP1.Q(), 0);
+    }
+    for (unsigned i = 0; i < Lanes; ++i) {
+      umov<ARMEmitter::SubRegSize::i32Bit>(TMP1, Vector, i);
+      EmitRSqrtTableLookup();
+      if (IsScalar) {
+        fmov(ARMEmitter::Size::i32Bit, Dst.S(), TMP1.W());
+      } else {
+        ins(ARMEmitter::SubRegSize::i32Bit, VTMP1, i, TMP1);
+      }
+    }
+    if (!IsScalar) {
+      mov(Dst.Q(), VTMP1.Q());
+    }
+    return;
+  }
 
   if (HostSupportsSVE256 && Is256Bit) {
     const auto Pred = PRED_TMP_32B.Merging();

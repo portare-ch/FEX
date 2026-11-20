@@ -196,6 +196,18 @@ public:
   FEX_DEFAULT_VISIBILITY virtual void EnableSystemOps() = 0;
 
   /**
+   * @brief haku: RSQRTSS and RSQRTPS return a CPU's own table values, not 1/sqrt(x) correctly
+   * rounded: for a positive normal x the result's exponent is (380 - (bits >> 23)) >> 1 and
+   * its mantissa Mantissas[(bits >> 13) & 2047] << 11 (2048 entries, the embedder's to keep
+   * alive). Zeros and denormals give a signed infinity, negative values the default NaN
+   * (0xFFC00000), +infinity 0, and a NaN comes back quiet. The 128-bit forms only: a 256-bit
+   * VRSQRTPS done as one operation (an SVE256 host) keeps FEX's own result. Whether there is
+   * a table is part of the translation, its address is not: a code cache needs the embedder
+   * to set one in every process or in none. Set before InitCore and before threads exist.
+   */
+  FEX_DEFAULT_VISIBILITY virtual void SetRSqrtTable(const uint16_t* Mantissas) = 0;
+
+  /**
    * @brief haku: RDTSC returns the host cycle counter times RatioQ32 / 2^32 (0: unscaled).
    * Set before InitCore.
    */

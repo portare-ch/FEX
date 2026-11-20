@@ -657,6 +657,9 @@ private:
   void VFScalarOperation(IR::OpSize OpSize, IR::OpSize ElementSize, bool ZeroUpperBits, ScalarBinaryOpCaller ScalarEmit,
                          ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1, ARMEmitter::VRegister Vector2);
   using ScalarUnaryOpCaller = std::function<void(ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar)>;
+  // haku: Context::SetRSqrtTable. TMP1 = the table's RSQRT of the float in TMP1 (W); TMP2,
+  // TMP3 and TMP4 are used, NZCV is not.
+  void EmitRSqrtTableLookup();
   void VFScalarUnaryOperation(IR::OpSize OpSize, IR::OpSize ElementSize, bool ZeroUpperBits, ScalarUnaryOpCaller ScalarEmit,
                               ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1,
                               std::variant<ARMEmitter::VRegister, ARMEmitter::Register> Vector2);
