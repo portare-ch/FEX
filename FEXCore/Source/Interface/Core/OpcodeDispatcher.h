@@ -801,7 +801,7 @@ public:
   void XSaveOp(OpcodeArgs);
 
   void PAlignrOp(OpcodeArgs);
-  void UCOMISxOp(OpcodeArgs, IR::OpSize ElementSize);
+  void UCOMISxOp(OpcodeArgs, IR::OpSize ElementSize, bool Signaling);
   void LDMXCSR(OpcodeArgs);
   void STMXCSR(OpcodeArgs);
 
@@ -2350,10 +2350,14 @@ private:
   }
 
   // Compares two floats and sets flags for a COMISS instruction
-  void Comiss(IR::OpSize ElementSize, Ref Src1, Ref Src2) {
+  void Comiss(IR::OpSize ElementSize, Ref Src1, Ref Src2, bool Signaling = false) {
     // First, set flags according to Arm FCMP.
     HandleNZCVWrite();
-    _FCmp(ElementSize, Src1, Src2);
+    if (Signaling) {
+      _FCmpE(ElementSize, Src1, Src2); // haku: COMISS's invalid flag for a quiet NaN
+    } else {
+      _FCmp(ElementSize, Src1, Src2);
+    }
     CFInverted = false;
     ComissFlags();
   }

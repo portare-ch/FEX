@@ -263,6 +263,7 @@ static constexpr FlagInfo ClassifyConst(IROps Op) {
     });
 
   case OP_RDRAND: return FlagInfo::Pack({.Write = FLAG_NZCV});
+  case OP_FCMPE: return FlagInfo::Pack({.Write = FLAG_NZCV}); // haku: kept for the invalid flag it raises
 
   case OP_ADDNZCV:
   case OP_SUBNZCV:

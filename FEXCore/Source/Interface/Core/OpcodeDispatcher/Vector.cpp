@@ -3170,10 +3170,15 @@ void OpDispatchBuilder::SaveAVXState(Ref MemBase) {
 
 Ref OpDispatchBuilder::GetMXCSR() {
   Ref MXCSR = _LoadContextGPR(OpSize::i32Bit, offsetof(FEXCore::Core::CPUState, mxcsr));
-  // Mask out unsupported bits
-  // Keeps FZ, RC, exception masks, and DAZ
-  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFC0));
-  return MXCSR;
+  // Keeps FZ, RC, exception masks, and DAZ, and (haku) the six status flags: the ones the
+  // context holds (set through LDMXCSR, or put there by the embedder) and the host's since.
+  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFFF));
+  Ref Flags = _GetMXCSRFlags();
+  // With flush-to-zero a flushed result is an underflow to the host and nothing more; on x86
+  // it is inexact too.
+  Ref Flushed = _And(OpSize::i32Bit, _Lshr(OpSize::i32Bit, MXCSR, Constant(15)), _Lshr(OpSize::i32Bit, Flags, Constant(4)));
+  Flags = _Or(OpSize::i32Bit, Flags, _Lshl(OpSize::i32Bit, _And(OpSize::i32Bit, Flushed, Constant(1)), Constant(5)));
+  return _Or(OpSize::i32Bit, MXCSR, Flags);
 }
 
 void OpDispatchBuilder::FXRStoreOp(OpcodeArgs) {
@@ -3304,7 +3309,9 @@ void OpDispatchBuilder::RestoreSSEState(Ref MemBase) {
 }
 
 void OpDispatchBuilder::RestoreMXCSRState(Ref MXCSR) {
-  // Mask out unsupported bits
+  // haku: the status flags go to the host's (GetMXCSR reads them back from there); the context
+  // keeps the rest.
+  _SetMXCSRFlags(MXCSR);
   MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFC0));
 
   _StoreContextGPR(OpSize::i32Bit, MXCSR, offsetof(FEXCore::Core::CPUState, mxcsr));
@@ -3403,12 +3410,12 @@ void OpDispatchBuilder::VPALIGNROp(OpcodeArgs) {
   StoreResultFPR(Op, Result);
 }
 
-void OpDispatchBuilder::UCOMISxOp(OpcodeArgs, IR::OpSize ElementSize) {
+void OpDispatchBuilder::UCOMISxOp(OpcodeArgs, IR::OpSize ElementSize, bool Signaling) {
   const auto SrcSize = Op->Src[0].IsGPR() ? OpSize::i128Bit : ElementSize;
   Ref Src1 = LoadSourceFPR_WithOpSize(Op, Op->Dest, OpSize::i128Bit, Op->Flags);
   Ref Src2 = LoadSourceFPR_WithOpSize(Op, Op->Src[0], SrcSize, Op->Flags);
 
-  Comiss(ElementSize, Src1, Src2);
+  Comiss(ElementSize, Src1, Src2, Signaling);
 }
 
 void OpDispatchBuilder::LDMXCSR(OpcodeArgs) {

@@ -1711,6 +1711,18 @@ DEF_OP(Float_ToGPR_S) {
   }
 }
 
+DEF_OP(FCmpE) {
+  auto Op = IROp->C<IR::IROp_FCmpE>();
+  ARMEmitter::VRegister Scalar1 = GetVReg(Op->Scalar1);
+  ARMEmitter::VRegister Scalar2 = GetVReg(Op->Scalar2);
+
+  if (Op->ElementSize == IR::OpSize::i64Bit) {
+    fcmpe(Scalar1.D(), Scalar2.D());
+  } else {
+    fcmpe(Scalar1.S(), Scalar2.S());
+  }
+}
+
 DEF_OP(FCmp) {
   auto Op = IROp->C<IR::IROp_FCmp>();
   const auto EmitSubSize = Op->ElementSize == IR::OpSize::i64Bit ? ARMEmitter::ScalarRegSize::i64Bit : ARMEmitter::ScalarRegSize::i32Bit;

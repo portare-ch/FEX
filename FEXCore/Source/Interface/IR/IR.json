@@ -225,6 +225,19 @@
                 ],
         "HasSideEffects": true
       },
+      "GPR = GetMXCSRFlags": {
+        "Desc": ["haku: the host's cumulative floating-point exception flags (FPSR) as MXCSR's six",
+                 "status flags: IE, DE, ZE, OE, UE, PE in bits 0 to 5"
+                ],
+        "DestSize": "OpSize::i32Bit",
+        "HasSideEffects": true
+      },
+      "SetMXCSRFlags GPR:$Flags": {
+        "Desc": ["haku: sets the host's cumulative floating-point exception flags (FPSR) from",
+                 "MXCSR's six status flags in bits 0 to 5 of Flags (other bits ignored)"
+                ],
+        "HasSideEffects": true
+      },
       "GPR = PushRoundingMode u8:$RoundMode": {
         "Desc": ["Override the current rounding mode options for the thread, returning old FPCR"
                 ],
@@ -1672,6 +1685,14 @@
         "Desc": ["Does a scalar unordered compare and sets NZCV accordingly.",
                  "NZCV follows Arm conventions, a separate AXFLAG instruction is required for x86",
                  "Ordering flag result is true if either float input is NaN"
+                ],
+        "HasSideEffects": true
+      },
+
+      "FCmpE OpSize:$ElementSize, FPR:$Scalar1, FPR:$Scalar2": {
+        "Desc": ["haku: FCmp as a signaling compare (COMISS, COMISD): a quiet NaN raises the",
+                 "host's invalid-operation flag too, which GetMXCSRFlags reports.",
+                 "Not to be eliminated with its flags."
                 ],
         "HasSideEffects": true
       }
