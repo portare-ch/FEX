@@ -3078,9 +3078,10 @@
         "HasSideEffects": true,
         "X87": true
       },
-      "FPR = ReadStackValue u8:$StackLocation": {
+      "FPR = ReadStackValue u8:$StackLocation, i1:$Examine": {
         "Desc": [
-          "Reads a value off the stack at the offset"
+          "Reads a value off the stack at the offset",
+          "haku: Examine reads the register whatever is in it (FXAM): an empty one is no stack fault"
         ],
         "DestSize": "OpSize::i128Bit",
         "X87": true

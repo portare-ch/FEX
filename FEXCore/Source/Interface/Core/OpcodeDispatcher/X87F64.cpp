@@ -82,7 +82,7 @@ void OpDispatchBuilder::FBLDF64(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::FBSTPF64(OpcodeArgs) {
-  Ref converted = _F80CVTTo(_ReadStackValue(0), OpSize::i64Bit);
+  Ref converted = _F80CVTTo(_ReadStackValue(0, false), OpSize::i64Bit);
   converted = _F80BCDStore(converted);
   StoreResultFPR_WithOpSize(Op, Op->Dest, converted, OpSize::f80Bit, OpSize::i8Bit);
   _PopStackDestroy();
@@ -125,7 +125,7 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
     data = LastFILD64.Data;
   } else {
     // haku: as the x87 stores it: the integer indefinite for a NaN or a value out of range.
-    data = _Float_ToGPR_X87(OpSize::i64Bit, Size, _ReadStackValue(0), Truncate);
+    data = _Float_ToGPR_X87(OpSize::i64Bit, Size, _ReadStackValue(0, false), Truncate);
   }
   LastFILD64 = {};
   StoreResultGPR_WithOpSize(Op, Op->Dest, data, Size, OpSize::i8Bit,
@@ -356,7 +356,7 @@ void OpDispatchBuilder::FCOMIF64(OpcodeArgs, IR::OpSize Width, bool Integer, OpD
   if (Op->Src[0].IsNone()) {
     // Implicit arg
     uint8_t offset = Op->OP & 7;
-    b = _ReadStackValue(offset);
+    b = _ReadStackValue(offset, false);
   } else if (Width == OpSize::i16Bit || Width == OpSize::i32Bit || Width == OpSize::i64Bit) {
     // Memory arg
     if (Integer) {
@@ -406,7 +406,7 @@ void OpDispatchBuilder::X87FXTRACTF64(OpcodeArgs) {
   // if val is +/-Inf, then sig = val, exp = +inf
   // if val is NaN, then sig = val, exp = val
   // otherwise we just extract the 64-bit sig and exp as normal.
-  Ref Node = _ReadStackValue(0);
+  Ref Node = _ReadStackValue(0, false);
 
   Ref Gpr = _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, Node, 0);
 

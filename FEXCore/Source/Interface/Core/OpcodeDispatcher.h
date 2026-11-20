@@ -762,6 +762,7 @@ public:
   void X87FYL2X(OpcodeArgs, bool IsFYL2XP1);
   void X87LDENV(OpcodeArgs);
   void X87ModifySTP(OpcodeArgs, bool Inc);
+  void X87FFREEP(OpcodeArgs);
   void X87OpHelper(OpcodeArgs, FEXCore::IR::IROps IROp, bool ZeroC2);
   void X87NOP(OpcodeArgs);
 
