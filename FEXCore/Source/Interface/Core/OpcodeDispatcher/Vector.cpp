@@ -3170,10 +3170,16 @@ void OpDispatchBuilder::SaveAVXState(Ref MemBase) {
 
 Ref OpDispatchBuilder::GetMXCSR() {
   Ref MXCSR = _LoadContextGPR(OpSize::i32Bit, offsetof(FEXCore::Core::CPUState, mxcsr));
-  // Mask out unsupported bits
-  // Keeps FZ, RC, exception masks, and DAZ
-  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFC0));
-  return MXCSR;
+  // Keeps FZ, RC, exception masks, and DAZ, and (haku) the six status flags: the ones the
+  // context holds (as LDMXCSR loaded them, or as the embedder put them there) and the ones
+  // the host has raised since (FPSR, which LDMXCSR cleared).
+  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFFF));
+  Ref Raised = _GetMXCSRFlags();
+  // With flush-to-zero a flushed result is an underflow to the host and nothing more; on x86
+  // it is inexact too. Only for an underflow raised since the load, not for a loaded UE.
+  Ref Flushed = _And(OpSize::i32Bit, _Lshr(OpSize::i32Bit, MXCSR, Constant(15)), _Lshr(OpSize::i32Bit, Raised, Constant(4)));
+  Raised = _Or(OpSize::i32Bit, Raised, _Lshl(OpSize::i32Bit, _And(OpSize::i32Bit, Flushed, Constant(1)), Constant(5)));
+  return _Or(OpSize::i32Bit, MXCSR, Raised);
 }
 
 void OpDispatchBuilder::FXRStoreOp(OpcodeArgs) {
@@ -3304,8 +3310,10 @@ void OpDispatchBuilder::RestoreSSEState(Ref MemBase) {
 }
 
 void OpDispatchBuilder::RestoreMXCSRState(Ref MXCSR) {
-  // Mask out unsupported bits
-  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFC0));
+  // haku: the context keeps the status flags as loaded, and the host's start from none
+  // (GetMXCSR adds the ones raised since).
+  _SetMXCSRFlags(Constant(0));
+  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFFF));
 
   _StoreContextGPR(OpSize::i32Bit, MXCSR, offsetof(FEXCore::Core::CPUState, mxcsr));
   // We only support the rounding mode and FTZ bit being set
@@ -3403,12 +3411,12 @@ void OpDispatchBuilder::VPALIGNROp(OpcodeArgs) {
   StoreResultFPR(Op, Result);
 }
 
-void OpDispatchBuilder::UCOMISxOp(OpcodeArgs, IR::OpSize ElementSize) {
+void OpDispatchBuilder::UCOMISxOp(OpcodeArgs, IR::OpSize ElementSize, bool Signaling) {
   const auto SrcSize = Op->Src[0].IsGPR() ? OpSize::i128Bit : ElementSize;
   Ref Src1 = LoadSourceFPR_WithOpSize(Op, Op->Dest, OpSize::i128Bit, Op->Flags);
   Ref Src2 = LoadSourceFPR_WithOpSize(Op, Op->Src[0], SrcSize, Op->Flags);
 
-  Comiss(ElementSize, Src1, Src2);
+  Comiss(ElementSize, Src1, Src2, Signaling);
 }
 
 void OpDispatchBuilder::LDMXCSR(OpcodeArgs) {

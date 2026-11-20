@@ -159,6 +159,31 @@ DEF_OP(SetRoundingMode) {
   msr(ARMEmitter::SystemRegister::FPCR, TMP1);
 }
 
+// haku: FPSR's IOC, DZC, OFC, UFC, IXC (bits 0 to 4) and IDC (bit 7) are MXCSR's IE (0), ZE (2),
+// OE (3), UE (4), PE (5) and DE (1).
+DEF_OP(GetMXCSRFlags) {
+  auto Dst = GetReg(Node);
+  constexpr auto W = ARMEmitter::Size::i32Bit;
+  mrs(TMP1, ARMEmitter::SystemRegister::FPSR);
+  ubfx(W, TMP2, TMP1, 1, 4);               // DZC OFC UFC IXC
+  ubfx(W, TMP3, TMP1, 7, 1);               // IDC
+  and_(W, Dst, TMP1, 1);                   // IOC -> IE
+  orr(W, Dst, Dst, TMP2, ARMEmitter::ShiftType::LSL, 2);
+  orr(W, Dst, Dst, TMP3, ARMEmitter::ShiftType::LSL, 1);
+}
+
+DEF_OP(SetMXCSRFlags) {
+  auto Op = IROp->C<IR::IROp_SetMXCSRFlags>();
+  auto Flags = GetReg(Op->Flags);
+  constexpr auto W = ARMEmitter::Size::i32Bit;
+  ubfx(W, TMP2, Flags, 2, 4);              // ZE OE UE PE
+  ubfx(W, TMP3, Flags, 1, 1);              // DE
+  and_(W, TMP1, Flags, 1);                 // IE -> IOC
+  orr(W, TMP1, TMP1, TMP2, ARMEmitter::ShiftType::LSL, 1);
+  orr(W, TMP1, TMP1, TMP3, ARMEmitter::ShiftType::LSL, 7);
+  msr(ARMEmitter::SystemRegister::FPSR, TMP1);
+}
+
 DEF_OP(PushRoundingMode) {
   auto Op = IROp->C<IR::IROp_PushRoundingMode>();
   auto Dest = GetReg(Node);
