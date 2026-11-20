@@ -112,10 +112,17 @@ struct OpHandlers<IR::OP_F80CMP> {
 
     // haku: FUCOM and its kin are quiet: only a signaling NaN is an invalid operation to them,
     // where FCOM's raise it for any NaN (as SoftFloat's lt and le do). The translation says
-    // which this is in the context (OpDispatchBuilder::FCOMI).
+    // which this is in the context (OpDispatchBuilder::FCOMI). An encoding the x87 doesn't
+    // support (the integer bit clear with a nonzero exponent: pseudo-NaNs, pseudo-infinities,
+    // unnormals) is an invalid operation to every compare, and unordered.
+    const auto Unsupported = [](const X80SoftFloat& V) { return (V.Top.Exponent & 0x7FFF) != 0 && !(V.Significand >> 63); };
     const auto IsNaN = [](const X80SoftFloat& V) { return (V.Top.Exponent & 0x7FFF) == 0x7FFF && (V.Significand << 1) != 0; };
     const auto IsSNaN = [&](const X80SoftFloat& V) { return IsNaN(V) && !(V.Significand & (1ULL << 62)); };
     const X80SoftFloat A = Src1, B = Src2;
+    if (Unsupported(A) || Unsupported(B)) {
+      State.State.exceptionFlags |= softfloat_flag_invalid;
+      return 1 << IR::FCMP_FLAG_UNORDERED;
+    }
     if (Frame->State.flags[FEXCore::X86State::X87FLAG_ZE_LOC] && (IsNaN(A) || IsNaN(B))) {
       if (IsSNaN(A) || IsSNaN(B)) {
         State.State.exceptionFlags |= softfloat_flag_invalid;
