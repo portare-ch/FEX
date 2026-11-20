@@ -660,6 +660,8 @@ private:
   // haku: Context::SetRSqrtTable. TMP1 = the table's RSQRT of the float in TMP1 (W); TMP2,
   // TMP3 and TMP4 are used, NZCV is not.
   void EmitRSqrtTableLookup();
+  // haku: Context::SetRcpTable, the same for RCP.
+  void EmitRcpTableLookup();
   void VFScalarUnaryOperation(IR::OpSize OpSize, IR::OpSize ElementSize, bool ZeroUpperBits, ScalarUnaryOpCaller ScalarEmit,
                               ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1,
                               std::variant<ARMEmitter::VRegister, ARMEmitter::Register> Vector2);

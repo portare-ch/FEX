@@ -492,6 +492,10 @@ public:
     RSqrtTable = Mantissas;
   }
 
+  void SetRcpTable(const uint16_t* Mantissas) override {
+    RcpTable = Mantissas;
+  }
+
   void SetIDTRegister(uint64_t Base, uint16_t Limit) override {
     IDTBase = Base;
     IDTLimit = Limit;
@@ -511,6 +515,7 @@ public:
   bool SystemOps = false;
   uint64_t GuestCycleCounterRatioQ32 = 0;
   const uint16_t* RSqrtTable = nullptr; // haku: Context::SetRSqrtTable
+  const uint16_t* RcpTable = nullptr;   // haku: Context::SetRcpTable
   uint64_t IDTBase = 0;
   uint16_t IDTLimit = 0;
   HookQueryFn HookQuery = nullptr;

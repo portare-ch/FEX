@@ -535,6 +535,11 @@ struct CpuStateFrame {
    */
   const uint16_t* RSqrtTable {};
 
+  /**
+   * @brief haku: the embedder's RCP mantissa table (Context::SetRcpTable), read the same way.
+   */
+  const uint16_t* RcpTable {};
+
   struct SynchronousFaultDataStruct {
     bool FaultToTopAndGeneratedException {};
     uint8_t Signal;
