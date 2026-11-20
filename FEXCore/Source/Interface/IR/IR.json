@@ -3108,6 +3108,7 @@
       },
       "FPR = F80Add FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80SubStack u8:$DstStack, u8:$SrcStack1, u8:$SrcStack2": {
@@ -3141,6 +3142,7 @@
           "`FPR = X80Src2 - X80Src1`"
         ],
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80MulStack u8:$SrcStack1, u8:$SrcStack2": {
@@ -3159,6 +3161,7 @@
       },
       "FPR = F80Mul FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80DivStack u8:$DstStack, u8:$SrcStack1, u8:$SrcStack2": {
@@ -3195,6 +3198,7 @@
           "`FPR = X80Src1 / X80Src2`"
         ],
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80StackXchange u8:$SrcStack": {
@@ -3239,6 +3243,7 @@
       },
       "FPR = F80ATAN FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80FPREMStack": {
@@ -3247,6 +3252,7 @@
       },
       "FPR = F80FPREM FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80FPREM1Stack": {
@@ -3255,6 +3261,7 @@
       },
       "FPR = F80FPREM1 FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80SCALEStack": {
@@ -3263,22 +3270,27 @@
       },
       "FPR = F80SCALE FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80CVT OpSize:#Size, FPR:$X80Src": {
         "DestSize": "Size",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "GPR = F80CVTInt OpSize:#Size, FPR:$X80Src, i1:$Truncate": {
         "DestSize": "Size",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80CVTTo FPR:$X80Src, OpSize:$SrcSize": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80CVTToInt GPR:$Src, OpSize:$SrcSize": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80RoundStack": {
@@ -3290,6 +3302,7 @@
       },
       "FPR = F80Round FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80F2XM1Stack": {
@@ -3298,10 +3311,12 @@
       },
       "FPR = F80F2XM1 FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80TAN FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80SINStack": {
@@ -3310,6 +3325,7 @@
       },
       "FPR = F80SIN FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80COSStack": {
@@ -3318,6 +3334,7 @@
       },
       "FPR = F80COS FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR:$Sin, FPR:$Cos = F80SINCOS FPR:$X80Src": {
@@ -3335,14 +3352,17 @@
       },
       "FPR = F80SQRT FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80XTRACT_EXP FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80XTRACT_SIG FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "GPR = F80StackTest u8:$SrcStack": {
@@ -3374,14 +3394,17 @@
                  "Ordering flag result is true if either float input is NaN"
                 ],
         "DestSize": "OpSize::i32Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80BCDLoad FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80BCDStore FPR:$X80Src": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80FYL2XStack": {
@@ -3396,6 +3419,7 @@
       },
       "FPR = F80FYL2X FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "FPR = F80FYL2XP1Stack": {
@@ -3410,6 +3434,7 @@
       },
       "FPR = F80FYL2XP1 FPR:$X80Src1, FPR:$X80Src2": {
         "DestSize": "OpSize::i128Bit",
+        "HasSideEffects": true,
         "JITDispatch": false
       },
       "F80VBSLStack OpSize:#RegisterSize, FPR:$VectorMask, u8:$SrcStack1, u8:$SrcStack2": {

@@ -41,6 +41,26 @@ FEXCORE_PRESERVE_ALL_ATTR static void HandleX87Exception(const softfloat_state& 
   if (State.exceptionFlags & softfloat_flag_invalid) {
     Frame->State.flags[FEXCore::X86State::X87FLAG_IE_LOC] = 1;
   }
+  // haku: and the others, which the status word reports with it (OpDispatchBuilder::
+  // X87KeptExceptions: one byte laid out as the status word's bits 0 to 5). SoftFloat judges
+  // tininess after rounding and at the precision the control word selects, as the x87 does.
+  uint8_t Flags = 0;
+  if (State.exceptionFlags & softfloat_flag_invalid) {
+    Flags |= 1 << 0;
+  }
+  if (State.exceptionFlags & softfloat_flag_infinite) {
+    Flags |= 1 << 2;
+  }
+  if (State.exceptionFlags & softfloat_flag_overflow) {
+    Flags |= 1 << 3;
+  }
+  if (State.exceptionFlags & softfloat_flag_underflow) {
+    Flags |= 1 << 4;
+  }
+  if (State.exceptionFlags & softfloat_flag_inexact) {
+    Flags |= 1 << 5;
+  }
+  Frame->State.flags[FEXCore::X86State::X87FLAG_DE_LOC] |= Flags;
 }
 
 // Wrapper for SoftFloat state to handle X87 exceptions
@@ -89,6 +109,19 @@ struct OpHandlers<IR::OP_F80CMP> {
 
     bool eq, lt, nan;
     uint64_t ResultFlags = 0;
+
+    // haku: FUCOM and its kin are quiet: only a signaling NaN is an invalid operation to them,
+    // where FCOM's raise it for any NaN (as SoftFloat's lt and le do). The translation says
+    // which this is in the context (OpDispatchBuilder::FCOMI).
+    const auto IsNaN = [](const X80SoftFloat& V) { return (V.Top.Exponent & 0x7FFF) == 0x7FFF && (V.Significand << 1) != 0; };
+    const auto IsSNaN = [&](const X80SoftFloat& V) { return IsNaN(V) && !(V.Significand & (1ULL << 62)); };
+    const X80SoftFloat A = Src1, B = Src2;
+    if (Frame->State.flags[FEXCore::X86State::X87FLAG_ZE_LOC] && (IsNaN(A) || IsNaN(B))) {
+      if (IsSNaN(A) || IsSNaN(B)) {
+        State.State.exceptionFlags |= softfloat_flag_invalid;
+      }
+      return 1 << IR::FCMP_FLAG_UNORDERED;
+    }
 
     X80SoftFloat::FCMP(&State.State, Src1, Src2, &eq, &lt, &nan);
     if (lt) {

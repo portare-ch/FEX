@@ -948,6 +948,17 @@ void Dispatcher::EmitF32ToExtF80() {
   (void)b(&Done);
 
   (void)Bind(&NaN);
+  {
+    // haku: a signaling NaN is an invalid operation to the load that converts it (and comes
+    // out quiet): the x87's IE, in the flag and in the kept exceptions the status word reads.
+    ARMEmitter::ForwardLabel Quiet;
+    (void)tbnz(TMP3, 22, &Quiet);
+    ldrb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+    orr(ARMEmitter::Size::i32Bit, TMP1, TMP1, 1);
+    strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+    strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_IE_LOC]));
+    (void)Bind(&Quiet);
+  }
   lsl(ARMEmitter::Size::i32Bit, TMP2, TMP4, 15);
   orr(ARMEmitter::Size::i32Bit, TMP2, TMP2, 0x7FFF);
 
@@ -1025,6 +1036,17 @@ void Dispatcher::EmitF64ToExtF80() {
   (void)b(&Done);
 
   (void)Bind(&NaN);
+  {
+    // haku: a signaling NaN is an invalid operation to the load that converts it (and comes
+    // out quiet): the x87's IE, in the flag and in the kept exceptions the status word reads.
+    ARMEmitter::ForwardLabel Quiet;
+    (void)tbnz(TMP3, 51, &Quiet);
+    ldrb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+    orr(ARMEmitter::Size::i32Bit, TMP1, TMP1, 1);
+    strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+    strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_IE_LOC]));
+    (void)Bind(&Quiet);
+  }
   lsl(ARMEmitter::Size::i64Bit, TMP2, TMP4, 15);
   orr(ARMEmitter::Size::i64Bit, TMP2, TMP2, 0x7FFF);
 
