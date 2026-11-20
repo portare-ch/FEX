@@ -1658,6 +1658,44 @@ DEF_OP(Float_ToGPR_ZS) {
   }
 }
 
+DEF_OP(Float_ToGPR_X87) {
+  auto Op = IROp->C<IR::IROp_Float_ToGPR_X87>();
+
+  ARMEmitter::Register Dst = GetReg(Node);
+  ARMEmitter::VRegister Src = GetVReg(Op->Scalar);
+  constexpr auto X = ARMEmitter::Size::i64Bit;
+  ARMEmitter::ForwardLabel Indefinite, Done;
+
+  // TMP1: all ones for a number, 0 for a NaN (no flags: NZCV is the guest's).
+  fcmeq(ARMEmitter::ScalarRegSize::i64Bit, VTMP2, Src, Src);
+  fmov(X, TMP1, VTMP2.D());
+  if (Op->Truncate) {
+    fcvtzs(X, Dst, Src.D());
+  } else {
+    frinti(VTMP1.D(), Src.D());
+    fcvtzs(X, Dst, VTMP1.D());
+  }
+  // TMP2: 0 when the 64-bit result is the integer's own. The conversion saturates, and no
+  // double converts to INT64_MAX itself.
+  switch (Op->IntSize) {
+  case IR::OpSize::i16Bit: sxth(X, TMP2, Dst); break;
+  case IR::OpSize::i32Bit: sxtw(TMP2, Dst.W()); break;
+  default: LoadConstant(X, TMP2, 0x7FFF'FFFF'FFFF'FFFFULL); break;
+  }
+  if (Op->IntSize == IR::OpSize::i64Bit) {
+    (void)cbz(X, TMP1, &Indefinite);
+    eor(X, TMP2, TMP2, Dst);
+    (void)cbnz(X, TMP2, &Done);
+  } else {
+    eor(X, TMP2, TMP2, Dst);
+    (void)cbz(X, TMP1, &Indefinite);
+    (void)cbz(X, TMP2, &Done);
+  }
+  (void)Bind(&Indefinite);
+  LoadConstant(X, Dst, Op->IntSize == IR::OpSize::i16Bit ? 0x8000ULL : Op->IntSize == IR::OpSize::i32Bit ? 0x8000'0000ULL : 0x8000'0000'0000'0000ULL);
+  (void)Bind(&Done);
+}
+
 DEF_OP(Float_ToGPR_S) {
   auto Op = IROp->C<IR::IROp_Float_ToGPR_S>();
 

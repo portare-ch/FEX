@@ -105,32 +105,32 @@ void OpDispatchBuilder::FILDF64(OpcodeArgs) {
   auto ConvertedData = _Float_FromGPR_S(OpSize::i64Bit, ReadWidth == OpSize::i32Bit ? OpSize::i32Bit : OpSize::i64Bit, Data);
   _PushStack(ConvertedData, Invalid(), OpSize::iInvalid);
   StoreX87FIP(Op);
+
+  // haku: a 64-bit integer doesn't fit a double. Kept for the FISTP that follows at once
+  // (FISTF64): the pair is a 64-bit copy, exact on an x87 at every precision setting.
+  LastFILD64 = {};
+  if (ReadWidth == OpSize::i64Bit) {
+    LastFILD64 = {.Op = Op, .Block = GetCurrentBlock(), .Data = Data};
+  }
 }
 
 void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
   const auto Size = OpSizeFromSrc(Op);
 
-  Ref data = _ReadStackValue(0);
-  bool CanUseFloatReg = Size == OpSize::i64Bit;
-  if (CanUseFloatReg) {
-    // If possible, it's faster to keep the data in an FPR than doing a GPR transfer.
-    if (Truncate) {
-      data = _Vector_FToZS(OpSize::i128Bit, OpSize::i64Bit, data);
-    } else {
-      data = _Vector_FToS(OpSize::i128Bit, OpSize::i64Bit, data);
-    }
-    StoreResultFPR_WithOpSize(Op, Op->Dest, data, OpSize::i64Bit, OpSize::i8Bit);
+  const bool Pops = (Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0;
+  Ref data {};
+  if (Size == OpSize::i64Bit && Pops && LastFILD64.Data && LastFILD64.Op == Op - 1 && LastFILD64.Block == GetCurrentBlock()) {
+    // haku: FILD m64 then FISTP m64 at once: the integer itself (see FILDF64).
+    data = LastFILD64.Data;
   } else {
-    if (Truncate) {
-      data = _Float_ToGPR_ZS(Size == OpSize::i32Bit ? OpSize::i32Bit : OpSize::i64Bit, OpSize::i64Bit, data);
-    } else {
-      data = _Float_ToGPR_S(Size == OpSize::i32Bit ? OpSize::i32Bit : OpSize::i64Bit, OpSize::i64Bit, data);
-    }
-    StoreResultGPR_WithOpSize(Op, Op->Dest, data, Size, OpSize::i8Bit,
-                              CTX->IsVectorAtomicTSOEnabled() ? MemoryAccessType::DEFAULT : MemoryAccessType::NONTSO);
+    // haku: as the x87 stores it: the integer indefinite for a NaN or a value out of range.
+    data = _Float_ToGPR_X87(OpSize::i64Bit, Size, _ReadStackValue(0), Truncate);
   }
+  LastFILD64 = {};
+  StoreResultGPR_WithOpSize(Op, Op->Dest, data, Size, OpSize::i8Bit,
+                            CTX->IsVectorAtomicTSOEnabled() ? MemoryAccessType::DEFAULT : MemoryAccessType::NONTSO);
 
-  if ((Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0) {
+  if (Pops) {
     _PopStackDestroy();
   }
   StoreX87FIP(Op);
