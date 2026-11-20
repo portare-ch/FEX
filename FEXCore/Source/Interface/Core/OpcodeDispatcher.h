@@ -777,6 +777,10 @@ public:
   void FBSTPF64(OpcodeArgs);
   void FCOMIF64(OpcodeArgs, IR::OpSize width, bool Integer, FCOMIFlags whichflags, bool poptwice);
   void FDIVF64(OpcodeArgs, IR::OpSize Width, bool Integer, bool Reverse, OpResult ResInST0);
+  // haku: the reduced x87's exception flags (X87.cpp)
+  Ref X87KeptExceptions();
+  void X87ClearExceptions(Ref NewFlags);
+  void X87KeepExceptions();
   void FILDF64(OpcodeArgs);
   // haku: the last FILD m64 (FILDF64), for the FISTP m64 that follows it at once.
   struct {

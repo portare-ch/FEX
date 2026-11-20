@@ -246,7 +246,62 @@ DEF_ZIPOP(VUnZip2, uzp2)
 DEF_ZIPOP(VTrn, trn1)
 DEF_ZIPOP(VTrn2, trn2)
 
-DEF_FUNOP(VFSqrt, fsqrt)
+DEF_OP(VFSqrt) {
+  const auto Op = IROp->C<IR::IROp_VFSqrt>();
+  const auto OpSize = IROp->Size;
+
+  const auto ElementSize = Op->Header.ElementSize;
+  const auto SubRegSize = ConvertSubRegSize248(IROp);
+  const auto Is256Bit = OpSize == IR::OpSize::i256Bit;
+  LOGMAN_THROW_A_FMT(!Is256Bit || HostSupportsSVE256, "Need SVE256 support in order to use {} with 256-bit operation", __func__);
+
+  const auto Dst = GetVReg(Node);
+  const auto Src = GetVReg(Op->Vector);
+
+  if (HostSupportsSVE256 && Is256Bit) {
+    fsqrt(SubRegSize, Dst.Z(), PRED_TMP_32B.Merging(), Src.Z());
+    return;
+  }
+  const auto IsScalar = ElementSize == OpSize;
+  if (ElementSize != IR::OpSize::i32Bit && ElementSize != IR::OpSize::i64Bit) {
+    if (IsScalar) {
+      fsqrt(Dst.H(), Src.H());
+    } else {
+      fsqrt(SubRegSize, Dst.Q(), Src.Q());
+    }
+    return;
+  }
+
+  // haku: a NaN result has the operand's sign, as on x86: the square root of a negative
+  // number is the negative default NaN there, the positive one on Arm. The result's NaN lanes
+  // take the operand's sign bit (an operand that is a NaN keeps its own already).
+  const bool Is32 = ElementSize == IR::OpSize::i32Bit;
+  const uint32_t SignShift = Is32 ? 31 : 63;
+  if (IsScalar) {
+    if (Is32) {
+      fsqrt(VTMP2.S(), Src.S());
+    } else {
+      fsqrt(VTMP2.D(), Src.D());
+    }
+    fcmeq(Is32 ? ARMEmitter::ScalarRegSize::i32Bit : ARMEmitter::ScalarRegSize::i64Bit, VTMP1, VTMP2, VTMP2);
+  } else {
+    fsqrt(SubRegSize, VTMP2.Q(), Src.Q());
+    fcmeq(SubRegSize, VTMP1.Q(), VTMP2.Q(), VTMP2.Q());
+  }
+  bic(VTMP1.Q(), Src.Q(), VTMP1.Q());
+  ushr(SubRegSize, VTMP1.Q(), VTMP1.Q(), SignShift);
+  shl(SubRegSize, VTMP1.Q(), VTMP1.Q(), SignShift);
+  if (IsScalar) {
+    orr(VTMP2.Q(), VTMP2.Q(), VTMP1.Q());
+    if (Is32) {
+      fmov(Dst.S(), VTMP2.S());
+    } else {
+      fmov(Dst.D(), VTMP2.D());
+    }
+  } else {
+    orr(Dst.Q(), VTMP2.Q(), VTMP1.Q());
+  }
+}
 DEF_FUNOP(VFAbs, fabs)
 
 DEF_FBINOP(VFAdd, fadd)
@@ -603,9 +658,31 @@ DEF_OP(VFSqrtScalarInsert) {
   const auto ElementSize = Op->Header.ElementSize;
   const auto SubRegSize = ConvertSubRegSizePair248(IROp);
 
-  auto ScalarEmit = [this, SubRegSize](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
+  auto ScalarEmit = [this, SubRegSize, ElementSize](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
     auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
-    fsqrt(SubRegSize.Scalar, Dst, Src);
+    if (ElementSize != IR::OpSize::i32Bit && ElementSize != IR::OpSize::i64Bit) {
+      fsqrt(SubRegSize.Scalar, Dst, Src);
+      return;
+    }
+    // haku: a NaN result has the operand's sign, as on x86 (see VFSqrt). Dst is VTMP1 on a
+    // host without AFP and never the operand; with AFP only its first element may change.
+    const bool Is32 = ElementSize == IR::OpSize::i32Bit;
+    const uint32_t SignShift = Is32 ? 31 : 63;
+    const auto Sub = Is32 ? ARMEmitter::SubRegSize::i32Bit : ARMEmitter::SubRegSize::i64Bit;
+    const auto Scratch = HostSupportsAFP ? VTMP1 : Dst;
+    fsqrt(SubRegSize.Scalar, VTMP2, Src);
+    fcmeq(SubRegSize.Scalar, Scratch, VTMP2, VTMP2);
+    bic(Scratch.Q(), Src.Q(), Scratch.Q());
+    ushr(Sub, Scratch.Q(), Scratch.Q(), SignShift);
+    shl(Sub, Scratch.Q(), Scratch.Q(), SignShift);
+    orr(VTMP2.Q(), VTMP2.Q(), Scratch.Q());
+    if (HostSupportsAFP) {
+      ins(Sub, Dst, 0, VTMP2, 0);
+    } else if (Is32) {
+      fmov(Dst.S(), VTMP2.S());
+    } else {
+      fmov(Dst.D(), VTMP2.D());
+    }
   };
 
   // Bit of a tricky detail.

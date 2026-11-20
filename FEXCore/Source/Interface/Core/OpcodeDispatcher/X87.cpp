@@ -450,6 +450,9 @@ Ref OpDispatchBuilder::ReconstructX87StateFromFSW_Helper(Ref FSW) {
   SetRFLAG<FEXCore::X86State::X87FLAG_C2_LOC>(C2);
   SetRFLAG<FEXCore::X86State::X87FLAG_C3_LOC>(C3);
   SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(IE);
+  if (ReducedPrecisionMode) {
+    X87ClearExceptions(_And(OpSize::i32Bit, FSW, Constant(0x3F))); // haku: the loaded status word's
+  }
   return Top;
 }
 
@@ -678,7 +681,7 @@ void OpDispatchBuilder::FCOMI(OpcodeArgs, IR::OpSize Width, bool Integer, OpDisp
     } else {
       FEX_UNREACHABLE;
     }
-    Res = _F80CmpValue(b);
+    Res = _F80CmpValue(b, false);
   }
 
   Ref HostFlag_CF = _Bfe(OpSize::i64Bit, 1, FCMP_FLAG_LT, Res);
@@ -793,7 +796,37 @@ Ref OpDispatchBuilder::ReconstructFSW_Helper(Ref T) {
   auto IE = GetRFLAG(FEXCore::X86State::X87FLAG_IE_LOC);
   FSW = _Or(OpSize::i64Bit, FSW, IE);
 
+  if (ReducedPrecisionMode) {
+    // haku: the reduced x87 computes on the host, whose cumulative exception flags are the
+    // status word's (IE, DE, ZE, OE, UE, PE in bits 0 to 5, as MXCSR has them): the ones
+    // raised since they were last cleared, and the ones kept in the context meanwhile.
+    FSW = _Or(OpSize::i64Bit, FSW, _GetMXCSRFlags());
+    FSW = _Or(OpSize::i64Bit, FSW, X87KeptExceptions());
+  }
+
   return FSW;
+}
+
+// haku: the x87's exception flags that are no longer in the host's (FPSR): kept here when
+// LDMXCSR, or the embedder, clears the host's. One byte, in the flag slot the x87's DE has.
+static constexpr uint32_t X87KeptExceptionsOffset = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
+
+Ref OpDispatchBuilder::X87KeptExceptions() {
+  return _LoadContextGPR(OpSize::i8Bit, X87KeptExceptionsOffset);
+}
+
+// The host's flags move to where the other unit reads them (MXCSR's in the context for the
+// x87's FNCLEX, the x87's kept ones for LDMXCSR) and start again from none.
+void OpDispatchBuilder::X87ClearExceptions(Ref NewFlags) {
+  Ref Raised = _GetMXCSRFlags();
+  Ref MXCSR = _LoadContextGPR(OpSize::i32Bit, offsetof(FEXCore::Core::CPUState, mxcsr));
+  _StoreContextGPR(OpSize::i32Bit, _Or(OpSize::i32Bit, MXCSR, Raised), offsetof(FEXCore::Core::CPUState, mxcsr));
+  _StoreContextGPR(OpSize::i8Bit, NewFlags, X87KeptExceptionsOffset);
+  _SetMXCSRFlags(Constant(0));
+}
+
+void OpDispatchBuilder::X87KeepExceptions() {
+  _StoreContextGPR(OpSize::i8Bit, _Or(OpSize::i32Bit, X87KeptExceptions(), _GetMXCSRFlags()), X87KeptExceptionsOffset);
 }
 
 // Store Status Word
@@ -812,6 +845,9 @@ void OpDispatchBuilder::X87FNSTSW(OpcodeArgs, bool DestRAX) {
 void OpDispatchBuilder::FNCLEX(OpcodeArgs) {
   // Clear the exception flag bit
   SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(_Constant(0));
+  if (ReducedPrecisionMode) {
+    X87ClearExceptions(Constant(0)); // haku
+  }
 }
 
 void OpDispatchBuilder::FNINIT(OpcodeArgs) {
@@ -840,6 +876,9 @@ void OpDispatchBuilder::FNINIT(OpcodeArgs) {
   SetRFLAG<FEXCore::X86State::X87FLAG_C2_LOC>(Zero);
   SetRFLAG<FEXCore::X86State::X87FLAG_C3_LOC>(Zero);
   SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(Zero);
+  if (ReducedPrecisionMode) {
+    X87ClearExceptions(Zero); // haku
+  }
 
   // fninit resets the FIP.
   _StoreContextGPR(OpSize::i64Bit, _Constant(0), offsetof(FEXCore::Core::CPUState, FIP));

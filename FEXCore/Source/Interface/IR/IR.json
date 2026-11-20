@@ -3351,7 +3351,7 @@
         "DestSize": "OpSize::i32Bit",
         "X87": true
       },
-      "GPR = F80CmpValue FPR:$X80Src": {
+      "GPR = F80CmpValue FPR:$X80Src, i1:$Signaling": {
         "Desc": [
           "Does a scalar unordered compare between the value at the top of the stack and $X80Src and stores the asked for flags in to a GPR",
           "Ordering flag result is true if either float input is NaN"
