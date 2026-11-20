@@ -4792,6 +4792,7 @@ void OpDispatchBuilder::ResetWorkingList() {
   BlockSetRIP = false;
   DecodeFailure = false;
   ShouldDump = false;
+  LastFILD64 = {};
   CurrentCodeBlock = nullptr;
   RegCache.Written = 0;
   RegCache.Cached = 0;
