@@ -3311,7 +3311,11 @@ void OpDispatchBuilder::RestoreSSEState(Ref MemBase) {
 
 void OpDispatchBuilder::RestoreMXCSRState(Ref MXCSR) {
   // haku: the context keeps the status flags as loaded, and the host's start from none
-  // (GetMXCSR adds the ones raised since).
+  // (GetMXCSR adds the ones raised since). The reduced x87's status word reads the host's
+  // too: it keeps what they hold.
+  if (ReducedPrecisionMode) {
+    X87KeepExceptions();
+  }
   _SetMXCSRFlags(Constant(0));
   MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFFF));
 

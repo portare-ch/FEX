@@ -258,7 +258,7 @@ private:
 
     switch (Op->StoreSize) {
     case OpSize::i32Bit: {
-      StackNode = IREmit->_Float_FToF(OpSize::i32Bit, OpSize::i64Bit, StackNode);
+      StackNode = IREmit->_Float_F64ToF32X87(OpSize::i32Bit, StackNode); // haku: the x87's underflow
       [[fallthrough]];
     }
     case OpSize::i64Bit: {
@@ -1284,7 +1284,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
         Ref CmpNode {};
         if (ReducedPrecisionMode) {
-          CmpNode = IREmit->_FCmp(OpSize::i64Bit, StackNode, ZeroConst);
+          CmpNode = IREmit->_FCmpE(OpSize::i64Bit, StackNode, ZeroConst); // haku: FTST is signaling
         } else {
           CmpNode = IREmit->_F80Cmp(StackNode, ZeroConst);
         }
@@ -1300,7 +1300,8 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
         Ref CmpNode {};
         if (ReducedPrecisionMode) {
-          CmpNode = IREmit->_FCmp(OpSize::i64Bit, StackNode, Value);
+          // haku: FCOM's invalid operation for a quiet NaN
+          CmpNode = Op->Signaling ? IREmit->_FCmpE(OpSize::i64Bit, StackNode, Value) : IREmit->_FCmp(OpSize::i64Bit, StackNode, Value);
         } else {
           CmpNode = IREmit->_F80Cmp(StackNode, Value);
         }

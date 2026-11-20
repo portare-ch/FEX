@@ -6,6 +6,7 @@ desc: Handles x86/64 x87 to IR
 $end_info$
 */
 
+#include <string_view>
 #include "Interface/Core/OpcodeDispatcher.h"
 #include "Interface/Core/X86Tables/X86Tables.h"
 #include "Interface/IR/IR.h"
@@ -374,15 +375,18 @@ void OpDispatchBuilder::FCOMIF64(OpcodeArgs, IR::OpSize Width, bool Integer, OpD
     FEX_UNREACHABLE;
   }
 
+  // haku: FCOM, FCOMI and FICOM are signaling compares (a quiet NaN is an invalid operation);
+  // the FUCOM family isn't.
+  const bool Signaling = std::string_view(Op->TableInfo->Name).substr(0, 2) != "FU";
   if (WhichFlags == FCOMIFlags::FLAGS_X87) {
     // We are going to clobber NZCV, make sure it's in a GPR first.
     SaveNZCV();
 
-    _F80CmpValue(b);
+    _F80CmpValue(b, Signaling);
     ConvertNZCVToX87();
   } else {
     HandleNZCVWrite();
-    _F80CmpValue(b);
+    _F80CmpValue(b, Signaling);
     ComissFlags();
   }
 
