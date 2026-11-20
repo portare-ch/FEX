@@ -3171,14 +3171,15 @@ void OpDispatchBuilder::SaveAVXState(Ref MemBase) {
 Ref OpDispatchBuilder::GetMXCSR() {
   Ref MXCSR = _LoadContextGPR(OpSize::i32Bit, offsetof(FEXCore::Core::CPUState, mxcsr));
   // Keeps FZ, RC, exception masks, and DAZ, and (haku) the six status flags: the ones the
-  // context holds (set through LDMXCSR, or put there by the embedder) and the host's since.
+  // context holds (as LDMXCSR loaded them, or as the embedder put them there) and the ones
+  // the host has raised since (FPSR, which LDMXCSR cleared).
   MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFFF));
-  Ref Flags = _GetMXCSRFlags();
+  Ref Raised = _GetMXCSRFlags();
   // With flush-to-zero a flushed result is an underflow to the host and nothing more; on x86
-  // it is inexact too.
-  Ref Flushed = _And(OpSize::i32Bit, _Lshr(OpSize::i32Bit, MXCSR, Constant(15)), _Lshr(OpSize::i32Bit, Flags, Constant(4)));
-  Flags = _Or(OpSize::i32Bit, Flags, _Lshl(OpSize::i32Bit, _And(OpSize::i32Bit, Flushed, Constant(1)), Constant(5)));
-  return _Or(OpSize::i32Bit, MXCSR, Flags);
+  // it is inexact too. Only for an underflow raised since the load, not for a loaded UE.
+  Ref Flushed = _And(OpSize::i32Bit, _Lshr(OpSize::i32Bit, MXCSR, Constant(15)), _Lshr(OpSize::i32Bit, Raised, Constant(4)));
+  Raised = _Or(OpSize::i32Bit, Raised, _Lshl(OpSize::i32Bit, _And(OpSize::i32Bit, Flushed, Constant(1)), Constant(5)));
+  return _Or(OpSize::i32Bit, MXCSR, Raised);
 }
 
 void OpDispatchBuilder::FXRStoreOp(OpcodeArgs) {
@@ -3309,10 +3310,10 @@ void OpDispatchBuilder::RestoreSSEState(Ref MemBase) {
 }
 
 void OpDispatchBuilder::RestoreMXCSRState(Ref MXCSR) {
-  // haku: the status flags go to the host's (GetMXCSR reads them back from there); the context
-  // keeps the rest.
-  _SetMXCSRFlags(MXCSR);
-  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFC0));
+  // haku: the context keeps the status flags as loaded, and the host's start from none
+  // (GetMXCSR adds the ones raised since).
+  _SetMXCSRFlags(Constant(0));
+  MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFFF));
 
   _StoreContextGPR(OpSize::i32Bit, MXCSR, offsetof(FEXCore::Core::CPUState, mxcsr));
   // We only support the rounding mode and FTZ bit being set

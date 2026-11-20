@@ -624,6 +624,8 @@ DEF_OP(VFRSqrtScalarInsert) {
 
   auto ScalarEmit = [this, SubRegSize](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
     auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
+    // haku: x86's estimate raises no exception: the host's flags as they were (GetMXCSRFlags)
+    mrs(TMP1, ARMEmitter::SystemRegister::FPSR);
 
     fmov(SubRegSize.Scalar, VTMP1.Q(), 1.0f);
     fsqrt(SubRegSize.Scalar, VTMP2, Src);
@@ -633,11 +635,15 @@ DEF_OP(VFRSqrtScalarInsert) {
     } else {
       fdiv(SubRegSize.Scalar, Dst, VTMP1, VTMP2);
     }
+    msr(ARMEmitter::SystemRegister::FPSR, TMP1);
   };
 
   auto ScalarEmitRPRES = [this, SubRegSize](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
     auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
+    // haku: x86's estimate raises no exception: the host's flags as they were (GetMXCSRFlags)
+    mrs(TMP1, ARMEmitter::SystemRegister::FPSR);
     frsqrte(SubRegSize.Scalar, Dst.D(), Src.D());
+    msr(ARMEmitter::SystemRegister::FPSR, TMP1);
   };
 
   // haku: the CPU's table (Context::SetRSqrtTable)
@@ -675,6 +681,8 @@ DEF_OP(VFRecpScalarInsert) {
 
   auto ScalarEmit = [this, SubRegSize](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
     auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
+    // haku: x86's estimate raises no exception: the host's flags as they were (GetMXCSRFlags)
+    mrs(TMP1, ARMEmitter::SystemRegister::FPSR);
 
     fmov(SubRegSize.Scalar, VTMP1.Q(), 1.0f);
     if (HostSupportsAFP) {
@@ -683,11 +691,15 @@ DEF_OP(VFRecpScalarInsert) {
     } else {
       fdiv(SubRegSize.Scalar, Dst, VTMP1, Src);
     }
+    msr(ARMEmitter::SystemRegister::FPSR, TMP1);
   };
 
   auto ScalarEmitRPRES = [this, SubRegSize](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
     auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
+    // haku: x86's estimate raises no exception: the host's flags as they were (GetMXCSRFlags)
+    mrs(TMP1, ARMEmitter::SystemRegister::FPSR);
     frecpe(SubRegSize.Scalar, Dst, Src);
+    msr(ARMEmitter::SystemRegister::FPSR, TMP1);
   };
 
   // haku: the CPU's table (Context::SetRcpTable)
@@ -1704,6 +1716,9 @@ DEF_OP(VFRecp) {
     return;
   }
 
+  // haku: x86's estimate raises no exception: the host's flags as they were (GetMXCSRFlags)
+  mrs(TMP1, ARMEmitter::SystemRegister::FPSR);
+  const auto Emit = [&]() {
   if (HostSupportsSVE256 && Is256Bit) {
     const auto Pred = PRED_TMP_32B.Merging();
 
@@ -1763,6 +1778,9 @@ DEF_OP(VFRecp) {
       fdiv(SubRegSize.Vector, Dst.Q(), VTMP1.Q(), Vector.Q());
     }
   }
+  };
+  Emit();
+  msr(ARMEmitter::SystemRegister::FPSR, TMP1);
 }
 
 DEF_OP(VFRecpPrecision) {
@@ -1839,6 +1857,9 @@ DEF_OP(VFRSqrt) {
     return;
   }
 
+  // haku: x86's estimate raises no exception: the host's flags as they were (GetMXCSRFlags)
+  mrs(TMP1, ARMEmitter::SystemRegister::FPSR);
+  const auto Emit = [&]() {
   if (HostSupportsSVE256 && Is256Bit) {
     const auto Pred = PRED_TMP_32B.Merging();
     if (ElementSize == IR::OpSize::i32Bit && HostSupportsRPRES) {
@@ -1893,6 +1914,9 @@ DEF_OP(VFRSqrt) {
       fdiv(SubRegSize.Vector, Dst.Q(), VTMP1.Q(), VTMP2.Q());
     }
   }
+  };
+  Emit();
+  msr(ARMEmitter::SystemRegister::FPSR, TMP1);
 }
 
 DEF_OP(VFRSqrtPrecision) {
