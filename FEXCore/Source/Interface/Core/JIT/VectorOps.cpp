@@ -548,7 +548,12 @@ DEF_OP(VFMinScalarInsert) {
       // Only take the first operand if it is strictly less. Otherwise take
       // the second. This emulates all the weird x86 rules for signed zero and
       // NaNs. No, they're not IEEE-754 semantics.
-      fcmp(SubRegSize.Scalar, Src1, Src2);
+      // haku: a signaling compare: MINSS and MAXSS raise invalid for any NaN (GetMXCSRFlags).
+      switch (SubRegSize.Scalar) {
+      case ARMEmitter::ScalarRegSize::i64Bit: fcmpe(Src1.D(), Src2.D()); break;
+      case ARMEmitter::ScalarRegSize::i32Bit: fcmpe(Src1.S(), Src2.S()); break;
+      default: fcmp(SubRegSize.Scalar, Src1, Src2); break;
+      }
       fcsel(SubRegSize.Scalar, Dst, Src1, Src2, ARMEmitter::Condition::CC_MI);
     }
   };
@@ -574,7 +579,12 @@ DEF_OP(VFMaxScalarInsert) {
       fmax(SubRegSize.Scalar, Dst, Src1, Src2);
     } else {
       // Only take the first operand if it is strictly greater. See fmin.
-      fcmp(SubRegSize.Scalar, Src1, Src2);
+      // haku: a signaling compare: MINSS and MAXSS raise invalid for any NaN (GetMXCSRFlags).
+      switch (SubRegSize.Scalar) {
+      case ARMEmitter::ScalarRegSize::i64Bit: fcmpe(Src1.D(), Src2.D()); break;
+      case ARMEmitter::ScalarRegSize::i32Bit: fcmpe(Src1.S(), Src2.S()); break;
+      default: fcmp(SubRegSize.Scalar, Src1, Src2); break;
+      }
       fcsel(SubRegSize.Scalar, Dst, Src1, Src2, ARMEmitter::Condition::CC_GT);
     }
   };
