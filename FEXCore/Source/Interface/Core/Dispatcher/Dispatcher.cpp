@@ -923,10 +923,11 @@ void Dispatcher::EmitF32ToExtF80() {
   (void)cbz(ARMEmitter::Size::i32Bit, TMP3, &ZeroResult);
 
   (void)Bind(&Denormal);
-  // haku: a denormal operand is the x87's DE, in the kept exceptions the status word reads
-  ldrb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
-  orr(ARMEmitter::Size::i32Bit, TMP1, TMP1, 2);
-  strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+  // haku: a denormal operand is the x87's DE, unless the instruction turns out to be a stack
+  // fault, which comes first. Left pending (a byte in the flag slot the x87's OE has) for the
+  // stack pass to commit once the instruction's stack checks are done (CommitDenormal).
+  mov(ARMEmitter::Size::i32Bit, TMP1, 2);
+  strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_OE_LOC]));
   clz(ARMEmitter::Size::i32Bit, TMP1, TMP3);
   sub(ARMEmitter::Size::i32Bit, TMP1, TMP1, 8);
   mov(ARMEmitter::Size::i32Bit, TMP2, 1);
@@ -960,6 +961,7 @@ void Dispatcher::EmitF32ToExtF80() {
     ldrb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
     orr(ARMEmitter::Size::i32Bit, TMP1, TMP1, 1);
     strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+    mov(ARMEmitter::Size::i32Bit, TMP1, 1); // the flag alone: the kept byte holds more than it
     strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_IE_LOC]));
     (void)Bind(&Quiet);
   }
@@ -1015,10 +1017,11 @@ void Dispatcher::EmitF64ToExtF80() {
   (void)cbz(ARMEmitter::Size::i64Bit, TMP3, &ZeroResult);
 
   (void)Bind(&Denormal);
-  // haku: a denormal operand is the x87's DE, in the kept exceptions the status word reads
-  ldrb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
-  orr(ARMEmitter::Size::i32Bit, TMP1, TMP1, 2);
-  strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+  // haku: a denormal operand is the x87's DE, unless the instruction turns out to be a stack
+  // fault, which comes first. Left pending (a byte in the flag slot the x87's OE has) for the
+  // stack pass to commit once the instruction's stack checks are done (CommitDenormal).
+  mov(ARMEmitter::Size::i32Bit, TMP1, 2);
+  strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_OE_LOC]));
   clz(ARMEmitter::Size::i64Bit, TMP1, TMP3);
   sub(ARMEmitter::Size::i64Bit, TMP1, TMP1, 11);
   mov(ARMEmitter::Size::i64Bit, TMP2, 1);
@@ -1052,6 +1055,7 @@ void Dispatcher::EmitF64ToExtF80() {
     ldrb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
     orr(ARMEmitter::Size::i32Bit, TMP1, TMP1, 1);
     strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_DE_LOC]));
+    mov(ARMEmitter::Size::i32Bit, TMP1, 1); // the flag alone: the kept byte holds more than it
     strb(TMP1.W(), STATE.R(), offsetof(FEXCore::Core::CpuStateFrame, State.flags[FEXCore::X86State::X87FLAG_IE_LOC]));
     (void)Bind(&Quiet);
   }

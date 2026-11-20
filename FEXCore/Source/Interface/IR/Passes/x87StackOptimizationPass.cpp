@@ -298,6 +298,11 @@ private:
   // fast path doesn't know what a register held before the block.
   Ref StackFault(Ref Fault, Ref Value, bool Overflow);
   void ClearStackFaultC1(); // the operations that leave C1 clear after an overflow set it
+  // A denormal memory operand's DE, left pending by the conversion (Dispatcher::EmitF32ToExtF80),
+  // joins the kept exceptions unless this instruction took a stack fault (OpFault: the faults
+  // StackFault has checked for in the op being lowered, 1 or 0, or none).
+  void CommitDenormal();
+  Ref OpFault {};
   void StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset = 0, bool SetValid = true);
   // Update Top value in slow path for a pop
   void UpdateTopForPop_Slow(bool InvalidateTag = true);
@@ -498,7 +503,22 @@ inline Ref X87StackOptimization::GetX87ValidTag_Slow(uint8_t Offset) {
   }
 }
 
+inline void X87StackOptimization::CommitDenormal() {
+  if (ReducedPrecisionMode) {
+    return;
+  }
+  const auto Kept = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
+  const auto Pending = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_OE_LOC;
+  Ref DE = IREmit->_LoadContextGPR(OpSize::i8Bit, Pending);
+  if (OpFault) {
+    DE = IREmit->_And(OpSize::i32Bit, DE, IREmit->_Sub(OpSize::i32Bit, OpFault, GetConstant(1))); // nothing after a fault
+  }
+  IREmit->_StoreContextGPR(OpSize::i8Bit, IREmit->_Or(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, Kept), DE), Kept);
+  IREmit->_StoreContextGPR(OpSize::i8Bit, GetConstant(0), Pending);
+}
+
 inline Ref X87StackOptimization::StackFault(Ref Fault, Ref Value, bool Overflow) {
+  OpFault = OpFault ? IREmit->_Or(OpSize::i32Bit, OpFault, Fault) : Fault;
   const auto Kept = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
   Ref Mask = IREmit->_Sub(OpSize::i64Bit, GetConstant(0), Fault);
   // The kept exceptions (OpDispatchBuilder::X87KeptExceptions): IE (bit 0) and SF (bit 6), and
@@ -536,6 +556,11 @@ inline Ref X87StackOptimization::LoadStackValueAtOffset_Slow(uint8_t Offset, boo
     }
     TopValueCache[Offset] = Value;
   } else if (!ReducedPrecisionMode && !Examine) {
+    if (TopValidCache[Offset] == StackSlot::INVALID) {
+      // haku: this block emptied the register since it read or wrote the value (FFREE):
+      // an underflow, and the cached value stays what the register holds
+      return StackFault(GetConstant(1), TopValueCache[Offset], false);
+    }
     ClearStackFaultC1(); // haku: a read of a value this block already holds
   }
   return TopValueCache[Offset];
@@ -570,6 +595,14 @@ inline Ref X87StackOptimization::LoadStackValue(uint8_t Offset) {
 }
 
 inline void X87StackOptimization::StoreStackValue(Ref Value, uint8_t Offset, bool SetValid) {
+  if (!ReducedPrecisionMode && OpFault) {
+    // haku: the result of an operation that took a stack fault is the real indefinite, whatever
+    // its other operand was (a NaN there would have kept its payload)
+    Ref Indefinite = IREmit->_VCastFromGPR(OpSize::i128Bit, OpSize::i64Bit, IREmit->_Constant(0xC000'0000'0000'0000ULL));
+    Indefinite = IREmit->_VInsGPR(OpSize::i128Bit, OpSize::i16Bit, 4, Indefinite, IREmit->_Constant(0xFFFF));
+    Ref Mask = IREmit->_VDupFromGPR(OpSize::i128Bit, OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, GetConstant(0), OpFault));
+    Value = IREmit->_VBSL(OpSize::i128Bit, Mask, Indefinite, Value);
+  }
   if (SlowPath) {
     StoreStackValueAtOffset_Slow(Value, Offset, SetValid);
   } else {
@@ -724,6 +757,7 @@ void X87StackOptimization::HandleBinopValue(IROps Op64, bool VFOp64, IROps Op80,
                                             uint8_t StackOffset, Ref ValueNode, bool Reverse) {
   LOGMAN_THROW_A_FMT(!Reverse || VFOp64, "There are no reverse operations using non VFOp64 ops");
   auto StackNode = LoadStackValue(StackOffset);
+  CommitDenormal(); // haku: the memory operand's DE, if the read was no stack fault
 
   Ref Node = {};
   if (ReducedPrecisionMode) {
@@ -938,6 +972,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         continue;
       }
       IREmit->SetWriteCursor(CodeNode);
+      OpFault = {}; // haku: this op's stack faults (StackFault, CommitDenormal)
       switch (IROp->Op) {
       case OP_F80ADDSTACK: {
         const auto* Op = IROp->C<IROp_F80AddStack>();
@@ -1132,7 +1167,10 @@ void X87StackOptimization::Run(IREmitter* Emit) {
           UpdateTopForPush_Slow();
           if (!ReducedPrecisionMode && TopValidCache[0] != StackSlot::INVALID) {
             SourceNode = StackFault(GetX87ValidTag_Slow(0), SourceNode, true); // haku: a push onto a register in use
+          } else if (!ReducedPrecisionMode) {
+            ClearStackFaultC1(); // a push that fits
           }
+          CommitDenormal();
           StoreStackValueAtOffset_Slow(SourceNode);
         } else {
           if (Op->OriginalValue.IsInvalid()) {
@@ -1156,6 +1194,8 @@ void X87StackOptimization::Run(IREmitter* Emit) {
           UpdateTopForPush_Slow();
           if (!ReducedPrecisionMode && TopValidCache[0] != StackSlot::INVALID) {
             St0 = StackFault(GetX87ValidTag_Slow(0), St0, true); // haku: a push onto a register in use
+          } else if (!ReducedPrecisionMode) {
+            ClearStackFaultC1(); // a push that fits
           }
           StoreStackValueAtOffset_Slow(St0);
         } else {
@@ -1347,6 +1387,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         const auto* Op = IROp->C<IROp_F80CmpValue>();
         const auto& Value = CurrentIR.GetNode(Op->X80Src);
         auto StackNode = LoadStackValue();
+        CommitDenormal(); // haku: the memory operand's DE, if the read was no stack fault
 
         Ref CmpNode {};
         if (ReducedPrecisionMode) {
