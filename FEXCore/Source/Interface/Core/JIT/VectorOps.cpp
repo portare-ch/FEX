@@ -420,6 +420,48 @@ void Arm64JITCore::EmitRSqrtTableLookup() {
   (void)Bind(&Done);
 }
 
+void Arm64JITCore::EmitRcpTableLookup() {
+  // No compares: NZCV holds the guest's flags, which RCP leaves alone.
+  constexpr auto W = ARMEmitter::Size::i32Bit;
+  ARMEmitter::ForwardLabel Special, NaN, Tiny, Zero, Done;
+
+  // Normal: the exponent in 1..254.
+  ubfx(W, TMP2, TMP1, 23, 8);
+  (void)cbz(W, TMP2, &Tiny);
+  sub(W, TMP3, TMP2, 255);
+  (void)cbz(W, TMP3, &Special);
+  // The result's exponent, 253 - exponent: nothing at 0 or less, a signed zero.
+  movz(W, TMP3, 253);
+  sub(W, TMP3, TMP3, TMP2);
+  sub(W, TMP2, TMP3, 1);
+  (void)tbnz(TMP2, 31, &Zero);
+  ubfx(W, TMP2, TMP1, 12, 11);
+  ldr(TMP4, STATE, offsetof(FEXCore::Core::CpuStateFrame, RcpTable));
+  ldrh(TMP2, TMP4, TMP2, ARMEmitter::ExtendedType::LSL_64, 1);
+  lsl(W, TMP2, TMP2, 8);
+  orr(W, TMP2, TMP2, TMP3, ARMEmitter::ShiftType::LSL, 23);
+  and_(W, TMP1, TMP1, 0x8000'0000U);
+  orr(W, TMP1, TMP1, TMP2);
+  (void)b(&Done);
+
+  (void)Bind(&Special); // exponent 255: an infinity (a signed zero) or a NaN
+  ubfx(W, TMP2, TMP1, 0, 23);
+  (void)cbz(W, TMP2, &Zero);
+  orr(W, TMP1, TMP1, 0x0040'0000U); // quiet, payload and sign kept
+  (void)b(&Done);
+
+  (void)Bind(&Tiny); // zeros and denormals: an infinity of their sign
+  and_(W, TMP1, TMP1, 0x8000'0000U);
+  LoadConstant(W, TMP2, 0x7F80'0000U);
+  orr(W, TMP1, TMP1, TMP2);
+  (void)b(&Done);
+
+  (void)Bind(&Zero);
+  and_(W, TMP1, TMP1, 0x8000'0000U);
+
+  (void)Bind(&Done);
+}
+
 void Arm64JITCore::VFScalarUnaryOperation(IR::OpSize OpSize, IR::OpSize ElementSize, bool ZeroUpperBits, ScalarUnaryOpCaller ScalarEmit,
                                           ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1,
                                           std::variant<ARMEmitter::VRegister, ARMEmitter::Register> Vector2) {
@@ -638,11 +680,24 @@ DEF_OP(VFRecpScalarInsert) {
     frecpe(SubRegSize.Scalar, Dst, Src);
   };
 
-  std::array<ScalarUnaryOpCaller, 2> Handlers = {
+  // haku: the CPU's table (Context::SetRcpTable)
+  auto ScalarEmitTable = [this](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
+    auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
+    fmov(ARMEmitter::Size::i32Bit, TMP1.W(), Src.S());
+    EmitRcpTableLookup();
+    if (HostSupportsAFP) {
+      ins(ARMEmitter::SubRegSize::i32Bit, Dst, 0, TMP1);
+    } else {
+      fmov(ARMEmitter::Size::i32Bit, Dst.S(), TMP1.W());
+    }
+  };
+
+  std::array<ScalarUnaryOpCaller, 3> Handlers = {
     ScalarEmit,
     ScalarEmitRPRES,
+    ScalarEmitTable,
   };
-  const auto HandlerIndex = ElementSize == IR::OpSize::i32Bit && HostSupportsRPRES ? 1 : 0;
+  const auto HandlerIndex = ElementSize == IR::OpSize::i32Bit && CTX->RcpTable ? 2 : ElementSize == IR::OpSize::i32Bit && HostSupportsRPRES ? 1 : 0;
 
   // Bit of a tricky detail.
   // The upper bits of the destination comes from the first source.
@@ -1617,6 +1672,27 @@ DEF_OP(VFRecp) {
 
   const auto Dst = GetVReg(Node);
   const auto Vector = GetVReg(Op->Vector);
+
+  if (CTX->RcpTable && ElementSize == IR::OpSize::i32Bit && !Is256Bit) {
+    // haku: the CPU's table (Context::SetRcpTable), a lane at a time.
+    const unsigned Lanes = IsScalar ? 1 : IR::OpSizeToSize(OpSize) / 4;
+    if (!IsScalar) {
+      movi(ARMEmitter::SubRegSize::i64Bit, VTMP1.Q(), 0);
+    }
+    for (unsigned i = 0; i < Lanes; ++i) {
+      umov<ARMEmitter::SubRegSize::i32Bit>(TMP1, Vector, i);
+      EmitRcpTableLookup();
+      if (IsScalar) {
+        fmov(ARMEmitter::Size::i32Bit, Dst.S(), TMP1.W());
+      } else {
+        ins(ARMEmitter::SubRegSize::i32Bit, VTMP1, i, TMP1);
+      }
+    }
+    if (!IsScalar) {
+      mov(Dst.Q(), VTMP1.Q());
+    }
+    return;
+  }
 
   if (HostSupportsSVE256 && Is256Bit) {
     const auto Pred = PRED_TMP_32B.Merging();

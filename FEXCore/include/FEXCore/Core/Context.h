@@ -208,6 +208,16 @@ public:
   FEX_DEFAULT_VISIBILITY virtual void SetRSqrtTable(const uint16_t* Mantissas) = 0;
 
   /**
+   * @brief haku: RCPSS and RCPPS return a CPU's own table values, not 1/x correctly rounded:
+   * for a normal x the result has x's sign, the exponent 253 - (x's exponent) and the mantissa
+   * Mantissas[(bits >> 12) & 2047] << 8 (2048 entries, the embedder's to keep alive), or a
+   * signed zero when that exponent is 0 or less. Zeros and denormals give a signed infinity,
+   * infinities a signed zero, and a NaN comes back quiet. The same limits as SetRSqrtTable:
+   * the 128-bit forms only, set before InitCore and before threads exist.
+   */
+  FEX_DEFAULT_VISIBILITY virtual void SetRcpTable(const uint16_t* Mantissas) = 0;
+
+  /**
    * @brief haku: RDTSC returns the host cycle counter times RatioQ32 / 2^32 (0: unscaled).
    * Set before InitCore.
    */
