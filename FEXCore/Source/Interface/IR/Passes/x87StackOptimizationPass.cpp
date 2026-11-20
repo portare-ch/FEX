@@ -289,7 +289,20 @@ private:
   /// Set the valid tag for Value as valid (if Valid is true), or invalid (if Valid is false).
   void SetX87ValidTag(uint8_t Offset, bool Valid);
   // Generates slow code to load/store a value from an offset from the top of the stack
-  Ref LoadStackValueAtOffset_Slow(uint8_t Offset = 0);
+  // haku: Examine reads the register whatever is in it (FXAM): no stack fault for an empty one.
+  Ref LoadStackValueAtOffset_Slow(uint8_t Offset = 0, bool Examine = false);
+  // haku: the 80-bit x87's stack faults. A push that finds its register in use (overflow) and a
+  // read of an empty one (underflow) are invalid operations: IE and SF in the status word,
+  // C1 set for the overflow, and the real indefinite in place of the value. Fault is 1 or 0;
+  // returns the value to use. The 80-bit mode runs on the slow path throughout for this: the
+  // fast path doesn't know what a register held before the block.
+  Ref StackFault(Ref Fault, Ref Value, bool Overflow);
+  void ClearStackFaultC1(); // the operations that leave C1 clear after an overflow set it
+  // A denormal memory operand's DE, left pending by the conversion (Dispatcher::EmitF32ToExtF80),
+  // joins the kept exceptions unless this instruction took a stack fault (OpFault: the faults
+  // StackFault has checked for in the op being lowered, 1 or 0, or none).
+  void CommitDenormal();
+  Ref OpFault {};
   void StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset = 0, bool SetValid = true);
   // Update Top value in slow path for a pop
   void UpdateTopForPop_Slow(bool InvalidateTag = true);
@@ -399,7 +412,7 @@ inline void X87StackOptimization::InvalidateCachedRegs() {
 }
 
 inline void X87StackOptimization::Reset() {
-  SlowPath = false;
+  SlowPath = !ReducedPrecisionMode; // haku: the 80-bit x87's stack faults need the registers' own tags (StackFault)
   StackData.clear();
   InvalidateCaches();
 }
@@ -490,12 +503,65 @@ inline Ref X87StackOptimization::GetX87ValidTag_Slow(uint8_t Offset) {
   }
 }
 
-inline Ref X87StackOptimization::LoadStackValueAtOffset_Slow(uint8_t Offset) {
+inline void X87StackOptimization::CommitDenormal() {
+  if (ReducedPrecisionMode) {
+    return;
+  }
+  const auto Kept = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
+  const auto Pending = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_OE_LOC;
+  Ref DE = IREmit->_LoadContextGPR(OpSize::i8Bit, Pending);
+  if (OpFault) {
+    DE = IREmit->_And(OpSize::i32Bit, DE, IREmit->_Sub(OpSize::i32Bit, OpFault, GetConstant(1))); // nothing after a fault
+  }
+  IREmit->_StoreContextGPR(OpSize::i8Bit, IREmit->_Or(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, Kept), DE), Kept);
+  IREmit->_StoreContextGPR(OpSize::i8Bit, GetConstant(0), Pending);
+}
+
+inline Ref X87StackOptimization::StackFault(Ref Fault, Ref Value, bool Overflow) {
+  OpFault = OpFault ? IREmit->_Or(OpSize::i32Bit, OpFault, Fault) : Fault;
+  const auto Kept = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
+  Ref Mask = IREmit->_Sub(OpSize::i64Bit, GetConstant(0), Fault);
+  // The kept exceptions (OpDispatchBuilder::X87KeptExceptions): IE (bit 0) and SF (bit 6), and
+  // in bit 7 the C1 of an overflow, which the status word's reconstruction moves to C1.
+  // Bit 7 is the latest of them: a read, or a push that fits, leaves C1 clear as most x87
+  // operations do.
+  Ref Flags = IREmit->_And(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, Kept), GetConstant(0x7F));
+  Flags = IREmit->_Or(OpSize::i32Bit, Flags, IREmit->_And(OpSize::i32Bit, Mask, IREmit->_Constant(Overflow ? 0xC1 : 0x41)));
+  IREmit->_StoreContextGPR(OpSize::i8Bit, Flags, Kept);
+  // The real indefinite: a negative quiet NaN, 0xFFFF'C000000000000000.
+  Ref Indefinite = IREmit->_VCastFromGPR(OpSize::i128Bit, OpSize::i64Bit, IREmit->_Constant(0xC000'0000'0000'0000ULL));
+  Indefinite = IREmit->_VInsGPR(OpSize::i128Bit, OpSize::i16Bit, 4, Indefinite, IREmit->_Constant(0xFFFF));
+  return IREmit->_VBSL(OpSize::i128Bit, IREmit->_VDupFromGPR(OpSize::i128Bit, OpSize::i64Bit, Mask), Indefinite, Value);
+}
+
+inline void X87StackOptimization::ClearStackFaultC1() {
+  const auto Kept = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_DE_LOC;
+  IREmit->_StoreContextGPR(OpSize::i8Bit, IREmit->_And(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, Kept), GetConstant(0x7F)), Kept);
+}
+
+inline Ref X87StackOptimization::LoadStackValueAtOffset_Slow(uint8_t Offset, bool Examine) {
   auto Size = ReducedPrecisionMode ? OpSize::i64Bit : OpSize::i128Bit;
   if (!TopValueCache[Offset]) {
     // haku: context-indexed access, not LoadMem on a FormContextAddress pointer: the
     // x87 register file is host memory, which LoadMem would put behind the guest memory base.
-    TopValueCache[Offset] = IREmit->_LoadContextIndexed(GetOffsetTopWithCache_Slow(Offset), Size, MMBaseOffset(), 16, RegClass::FPR);
+    Ref Value = IREmit->_LoadContextIndexed(GetOffsetTopWithCache_Slow(Offset), Size, MMBaseOffset(), 16, RegClass::FPR);
+    if (Examine) {
+      return Value; // as it is, and not cached: a read after it must still fault
+    }
+    if (!ReducedPrecisionMode && TopValidCache[Offset] != StackSlot::VALID) {
+      // haku: an empty register read is a stack underflow
+      Value = StackFault(IREmit->_Xor(OpSize::i32Bit, GetX87ValidTag_Slow(Offset), GetConstant(1)), Value, false);
+    } else if (!ReducedPrecisionMode) {
+      ClearStackFaultC1();
+    }
+    TopValueCache[Offset] = Value;
+  } else if (!ReducedPrecisionMode && !Examine) {
+    if (TopValidCache[Offset] == StackSlot::INVALID) {
+      // haku: this block emptied the register since it read or wrote the value (FFREE):
+      // an underflow, and the cached value stays what the register holds
+      return StackFault(GetConstant(1), TopValueCache[Offset], false);
+    }
+    ClearStackFaultC1(); // haku: a read of a value this block already holds
   }
   return TopValueCache[Offset];
 }
@@ -529,6 +595,14 @@ inline Ref X87StackOptimization::LoadStackValue(uint8_t Offset) {
 }
 
 inline void X87StackOptimization::StoreStackValue(Ref Value, uint8_t Offset, bool SetValid) {
+  if (!ReducedPrecisionMode && OpFault) {
+    // haku: the result of an operation that took a stack fault is the real indefinite, whatever
+    // its other operand was (a NaN there would have kept its payload)
+    Ref Indefinite = IREmit->_VCastFromGPR(OpSize::i128Bit, OpSize::i64Bit, IREmit->_Constant(0xC000'0000'0000'0000ULL));
+    Indefinite = IREmit->_VInsGPR(OpSize::i128Bit, OpSize::i16Bit, 4, Indefinite, IREmit->_Constant(0xFFFF));
+    Ref Mask = IREmit->_VDupFromGPR(OpSize::i128Bit, OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, GetConstant(0), OpFault));
+    Value = IREmit->_VBSL(OpSize::i128Bit, Mask, Indefinite, Value);
+  }
   if (SlowPath) {
     StoreStackValueAtOffset_Slow(Value, Offset, SetValid);
   } else {
@@ -683,6 +757,7 @@ void X87StackOptimization::HandleBinopValue(IROps Op64, bool VFOp64, IROps Op80,
                                             uint8_t StackOffset, Ref ValueNode, bool Reverse) {
   LOGMAN_THROW_A_FMT(!Reverse || VFOp64, "There are no reverse operations using non VFOp64 ops");
   auto StackNode = LoadStackValue(StackOffset);
+  CommitDenormal(); // haku: the memory operand's DE, if the read was no stack fault
 
   Ref Node = {};
   if (ReducedPrecisionMode) {
@@ -897,6 +972,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         continue;
       }
       IREmit->SetWriteCursor(CodeNode);
+      OpFault = {}; // haku: this op's stack faults (StackFault, CommitDenormal)
       switch (IROp->Op) {
       case OP_F80ADDSTACK: {
         const auto* Op = IROp->C<IROp_F80AddStack>();
@@ -1089,6 +1165,12 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
         if (SlowPath) {
           UpdateTopForPush_Slow();
+          if (!ReducedPrecisionMode && TopValidCache[0] != StackSlot::INVALID) {
+            SourceNode = StackFault(GetX87ValidTag_Slow(0), SourceNode, true); // haku: a push onto a register in use
+          } else if (!ReducedPrecisionMode) {
+            ClearStackFaultC1(); // a push that fits
+          }
+          CommitDenormal();
           StoreStackValueAtOffset_Slow(SourceNode);
         } else {
           if (Op->OriginalValue.IsInvalid()) {
@@ -1110,6 +1192,11 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         if (SlowPath) {
           Ref St0 = LoadStackValueAtOffset_Slow(Offset);
           UpdateTopForPush_Slow();
+          if (!ReducedPrecisionMode && TopValidCache[0] != StackSlot::INVALID) {
+            St0 = StackFault(GetX87ValidTag_Slow(0), St0, true); // haku: a push onto a register in use
+          } else if (!ReducedPrecisionMode) {
+            ClearStackFaultC1(); // a push that fits
+          }
           StoreStackValueAtOffset_Slow(St0);
         } else {
           StackData.push(*Value);
@@ -1120,7 +1207,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       case OP_READSTACKVALUE: {
         const auto* Op = IROp->C<IROp_ReadStackValue>();
         auto Offset = Op->StackLocation;
-        Ref NewValue = LoadStackValue(Offset);
+        Ref NewValue = Op->Examine && SlowPath ? LoadStackValueAtOffset_Slow(Offset, true) : LoadStackValue(Offset);
 
         IREmit->ReplaceUsesWithAfter(CodeNode, NewValue, CodeNode);
         break;
@@ -1300,6 +1387,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         const auto* Op = IROp->C<IROp_F80CmpValue>();
         const auto& Value = CurrentIR.GetNode(Op->X80Src);
         auto StackNode = LoadStackValue();
+        CommitDenormal(); // haku: the memory operand's DE, if the read was no stack fault
 
         Ref CmpNode {};
         if (ReducedPrecisionMode) {
@@ -1327,6 +1415,9 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       }
 
       case OP_INCSTACKTOP: {
+        if (!ReducedPrecisionMode) {
+          ClearStackFaultC1(); // haku: FINCSTP and FDECSTP clear C1
+        }
         if (SlowPath) {
           UpdateTopForPop_Slow(false);
         } else {
@@ -1336,6 +1427,9 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       }
 
       case OP_DECSTACKTOP: {
+        if (!ReducedPrecisionMode) {
+          ClearStackFaultC1(); // haku: FINCSTP and FDECSTP clear C1
+        }
         if (SlowPath) {
           UpdateTopForPush_Slow();
         } else {

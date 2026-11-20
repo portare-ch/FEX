@@ -90,7 +90,7 @@ void OpDispatchBuilder::FBLD(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::FBSTP(OpcodeArgs) {
-  Ref converted = _F80BCDStore(_ReadStackValue(0));
+  Ref converted = _F80BCDStore(_ReadStackValue(0, false));
   StoreResultFPR_WithOpSize(Op, Op->Dest, converted, OpSize::f80Bit, OpSize::i8Bit);
   _PopStackDestroy();
   StoreX87FIP(Op);
@@ -162,7 +162,7 @@ void OpDispatchBuilder::FSTToStack(OpcodeArgs) {
 // Store integer to memory (possibly with truncation)
 void OpDispatchBuilder::FIST(OpcodeArgs, bool Truncate) {
   const auto Size = OpSizeFromSrc(Op);
-  Ref Data = _ReadStackValue(0);
+  Ref Data = _ReadStackValue(0, false);
 
   // For 16-bit integers, we need to manually check for overflow
   // since _F80CVTInt doesn't handle 16-bit overflow detection properly
@@ -458,7 +458,7 @@ Ref OpDispatchBuilder::ReconstructX87StateFromFSW_Helper(Ref FSW) {
   if (ReducedPrecisionMode) {
     X87ClearExceptions(_And(OpSize::i32Bit, FSW, Constant(0x3F))); // haku: the loaded status word's
   } else {
-    _StoreContextGPR(OpSize::i8Bit, _And(OpSize::i32Bit, FSW, Constant(0x3F)), X87KeptExceptionsOffset);
+    _StoreContextGPR(OpSize::i8Bit, _And(OpSize::i32Bit, FSW, Constant(0x7F)), X87KeptExceptionsOffset);
   }
   return Top;
 }
@@ -817,8 +817,11 @@ Ref OpDispatchBuilder::ReconstructFSW_Helper(Ref T) {
     FSW = _Or(OpSize::i64Bit, FSW, X87KeptExceptions());
   } else {
     // haku: the 80-bit x87's, which its soft-float operations leave in the context
-    // (HandleX87Exception); the host's flags are MXCSR's alone there.
-    FSW = _Or(OpSize::i64Bit, FSW, X87KeptExceptions());
+    // (HandleX87Exception); the host's flags are MXCSR's alone there. Bit 6 is SF, a stack
+    // fault's, and bit 7 the C1 of a stack overflow (X87StackOptimization::StackFault).
+    Ref Kept = X87KeptExceptions();
+    FSW = _Or(OpSize::i64Bit, FSW, _And(OpSize::i64Bit, Kept, Constant(0x7F)));
+    FSW = _Orlshl(OpSize::i64Bit, FSW, _Lshr(OpSize::i64Bit, Kept, Constant(7)), 9);
   }
 
   return FSW;
@@ -907,6 +910,16 @@ void OpDispatchBuilder::X87FFREE(OpcodeArgs) {
   StoreX87FIP(Op);
 }
 
+// haku: FFREEP st(i) marks st(i) empty and then pops, which empties st(0) too (a Zen 5 does:
+// after FFREEP st(3) on a full stack a push fits). It was TOP up by one and nothing freed,
+// which left the register in use: the next push to come round to it is a stack overflow now
+// that the 80-bit x87 has them.
+void OpDispatchBuilder::X87FFREEP(OpcodeArgs) {
+  _InvalidateStack(Op->OP & 7);
+  _PopStackDestroy();
+  StoreX87FIP(Op);
+}
+
 void OpDispatchBuilder::X87EMMS(OpcodeArgs) {
   // Tags all get set to 0b11
   _InvalidateStack(0xff);
@@ -953,7 +966,7 @@ void OpDispatchBuilder::X87FCMOV(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::X87FXAM(OpcodeArgs) {
-  auto a = _ReadStackValue(0);
+  auto a = _ReadStackValue(0, true); // haku: FXAM examines an empty register too, with no stack fault
   Ref Value = ReducedPrecisionMode ? _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, a, 0) : _VExtractToGPR(OpSize::i128Bit, OpSize::i64Bit, a, 1);
 
   // Extract the sign bit, which goes in C1
@@ -1058,7 +1071,7 @@ void OpDispatchBuilder::X87FXAM(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::X87FXTRACT(OpcodeArgs) {
-  auto Top = _ReadStackValue(0);
+  auto Top = _ReadStackValue(0, false);
 
   _PopStackDestroy();
   auto Exp = _F80XTRACT_EXP(Top);
