@@ -778,6 +778,12 @@ public:
   void FCOMIF64(OpcodeArgs, IR::OpSize width, bool Integer, FCOMIFlags whichflags, bool poptwice);
   void FDIVF64(OpcodeArgs, IR::OpSize Width, bool Integer, bool Reverse, OpResult ResInST0);
   void FILDF64(OpcodeArgs);
+  // haku: the last FILD m64 (FILDF64), for the FISTP m64 that follows it at once.
+  struct {
+    X86Tables::DecodedOp Op {};
+    Ref Block {};
+    Ref Data {};
+  } LastFILD64;
   void FISTF64(OpcodeArgs, bool Truncate);
   void FLDF64_Const(OpcodeArgs, uint64_t Num);
   void FLDF64(OpcodeArgs, IR::OpSize Width);
