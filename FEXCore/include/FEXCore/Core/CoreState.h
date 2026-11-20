@@ -528,6 +528,13 @@ struct CpuStateFrame {
    */
   uint64_t CycleCounterOffset {};
 
+  /**
+   * @brief haku: the embedder's RSQRT mantissa table (Context::SetRSqrtTable), which
+   * translated code reads from here: its address isn't in the code, so a cached
+   * translation holds in another process.
+   */
+  const uint16_t* RSqrtTable {};
+
   struct SynchronousFaultDataStruct {
     bool FaultToTopAndGeneratedException {};
     uint8_t Signal;

@@ -436,6 +436,7 @@ FEXCore::Core::InternalThreadState* ContextImpl::CreateThread(const FEXCore::Cor
 
   // Set up the thread manager state
   Thread->CurrentFrame->Thread = Thread;
+  Thread->CurrentFrame->RSqrtTable = RSqrtTable; // haku
 
   InitializeCompiler(Thread);
 

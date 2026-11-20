@@ -368,34 +368,37 @@ void Arm64JITCore::VFScalarOperation(IR::OpSize OpSize, IR::OpSize ElementSize, 
 // The untouched bits of the destination come from Vector1, unless it's a 256 vector
 // and ZeroUpperBits is true, in which case the upper bits are zero.
 void Arm64JITCore::EmitRSqrtTableLookup() {
+  // No compares: NZCV holds the guest's flags, which RSQRT leaves alone.
   constexpr auto W = ARMEmitter::Size::i32Bit;
-  ARMEmitter::ForwardLabel Special, NaN, Tiny, Negative, Done;
+  ARMEmitter::ForwardLabel Special, NaN, Infinity, Tiny, Negative, Done;
 
-  // Positive and normal: 0x00800000 <= bits < 0x7F800000.
+  // Positive and normal: 0x00800000 <= bits < 0x7F800000, so ((bits - 0x00800000) >> 24) - 0x7F
+  // is negative.
   sub(W, TMP2, TMP1, 0x800, true);
   lsr(W, TMP3, TMP2, 24);
-  cmp(W, TMP3, 0x7F);
-  (void)b(ARMEmitter::Condition::CC_HS, &Special);
+  sub(W, TMP3, TMP3, 0x7F);
+  (void)tbz(TMP3, 31, &Special);
   ubfx(W, TMP2, TMP1, 13, 11);
+  ldr(TMP4, STATE, offsetof(FEXCore::Core::CpuStateFrame, RSqrtTable));
   ldrh(TMP2, TMP4, TMP2, ARMEmitter::ExtendedType::LSL_64, 1);
   lsr(W, TMP3, TMP1, 23);
-  movz(W, TMP1, 380);
-  sub(W, TMP1, TMP1, TMP3);
-  lsr(W, TMP1, TMP1, 1);
+  movz(W, TMP4, 380);
+  sub(W, TMP3, TMP4, TMP3);
+  lsr(W, TMP3, TMP3, 1);
   lsl(W, TMP2, TMP2, 11);
-  orr(W, TMP1, TMP2, TMP1, ARMEmitter::ShiftType::LSL, 23);
+  orr(W, TMP1, TMP2, TMP3, ARMEmitter::ShiftType::LSL, 23);
   (void)b(&Done);
 
   (void)Bind(&Special);
+  // TMP2 = magnitude - infinity: positive for a NaN, 0 for an infinity.
   and_(W, TMP2, TMP1, 0x7FFF'FFFFU);
   LoadConstant(W, TMP3, 0x7F80'0000U);
-  cmp(W, TMP2, TMP3);
-  (void)b(ARMEmitter::Condition::CC_HI, &NaN);
-  lsr(W, TMP2, TMP2, 23);
+  sub(W, TMP2, TMP2, TMP3);
+  (void)cbz(W, TMP2, &Infinity);
+  (void)tbz(TMP2, 31, &NaN);
+  ubfx(W, TMP2, TMP1, 23, 8);
   (void)cbz(W, TMP2, &Tiny);
-  (void)tbnz(TMP1, 31, &Negative);
-  movz(W, TMP1, 0); // +infinity
-  (void)b(&Done);
+  (void)b(&Negative); // a negative normal
 
   (void)Bind(&NaN); // quiet, payload and sign kept
   orr(W, TMP1, TMP1, 0x0040'0000U);
@@ -404,6 +407,11 @@ void Arm64JITCore::EmitRSqrtTableLookup() {
   (void)Bind(&Tiny); // zeros and denormals: an infinity of their sign
   and_(W, TMP1, TMP1, 0x8000'0000U);
   orr(W, TMP1, TMP1, TMP3);
+  (void)b(&Done);
+
+  (void)Bind(&Infinity);
+  (void)tbnz(TMP1, 31, &Negative);
+  movz(W, TMP1, 0);
   (void)b(&Done);
 
   (void)Bind(&Negative);
@@ -584,7 +592,6 @@ DEF_OP(VFRSqrtScalarInsert) {
   auto ScalarEmitTable = [this](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
     auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
     fmov(ARMEmitter::Size::i32Bit, TMP1.W(), Src.S());
-    LoadConstant(ARMEmitter::Size::i64Bit, TMP4, reinterpret_cast<uintptr_t>(CTX->RSqrtTable));
     EmitRSqrtTableLookup();
     if (HostSupportsAFP) {
       ins(ARMEmitter::SubRegSize::i32Bit, Dst, 0, TMP1);
@@ -1728,7 +1735,6 @@ DEF_OP(VFRSqrt) {
   if (CTX->RSqrtTable && ElementSize == IR::OpSize::i32Bit && !Is256Bit) {
     // haku: the CPU's table (Context::SetRSqrtTable), a lane at a time.
     const unsigned Lanes = IsScalar ? 1 : IR::OpSizeToSize(OpSize) / 4;
-    LoadConstant(ARMEmitter::Size::i64Bit, TMP4, reinterpret_cast<uintptr_t>(CTX->RSqrtTable));
     if (!IsScalar) {
       movi(ARMEmitter::SubRegSize::i64Bit, VTMP1.Q(), 0);
     }
