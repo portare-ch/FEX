@@ -818,9 +818,9 @@ Ref OpDispatchBuilder::X87KeptExceptions() {
 // The host's flags move to where the other unit reads them (MXCSR's in the context for the
 // x87's FNCLEX, the x87's kept ones for LDMXCSR) and start again from none.
 void OpDispatchBuilder::X87ClearExceptions(Ref NewFlags) {
-  Ref Raised = _GetMXCSRFlags();
-  Ref MXCSR = _LoadContextGPR(OpSize::i32Bit, offsetof(FEXCore::Core::CPUState, mxcsr));
-  _StoreContextGPR(OpSize::i32Bit, _Or(OpSize::i32Bit, MXCSR, Raised), offsetof(FEXCore::Core::CPUState, mxcsr));
+  // MXCSR as STMXCSR would store it now: with x86's inexact for a result flushed to zero,
+  // which GetMXCSR adds only for an underflow the host still holds.
+  _StoreContextGPR(OpSize::i32Bit, GetMXCSR(), offsetof(FEXCore::Core::CPUState, mxcsr));
   _StoreContextGPR(OpSize::i8Bit, NewFlags, X87KeptExceptionsOffset);
   _SetMXCSRFlags(Constant(0));
 }
